@@ -249,7 +249,8 @@ def main():
             log(f"\n[{i}/{len(notes_full)}] {title[:40]} ({note.get('type')})")
 
             rec = {"note_id": nid, "list_title": title, "list_type": note.get("type"),
-                   "list_date": note.get("date"), "url": url, "ok": False, "_seq": i}
+                   "list_date": note.get("date"), "url": url, "ok": False, "_seq": i,
+                   "author": (sel.get("nickname") or "")}
 
             try:
                 page.goto(url, wait_until="domcontentloaded")

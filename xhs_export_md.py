@@ -143,7 +143,7 @@ def main():
                     help="额外的固定标签，逗号分隔（可选）")
     args = ap.parse_args()
     dest = os.path.abspath(args.dest)
-    author = (args.author or load_creator_nick()).strip()
+    fallback_author = (args.author or load_creator_nick()).strip()
     extra_tags = [t.strip() for t in (args.extra_tags or "").split(",") if t.strip()]
 
     if not os.path.isdir(SRC):
@@ -157,6 +157,7 @@ def main():
                   if os.path.isdir(os.path.join(SRC, d)))
     n_ok = 0
     index_lines = []
+    authors = set()
     for d in dirs:
         raw_p = os.path.join(SRC, d, "raw.json")
         if not os.path.exists(raw_p):
@@ -206,8 +207,10 @@ def main():
         L = []
         L.append("---")
         L.append(f'title: "{yaml_escape(title)}"')
-        if author:
-            L.append(f'author: "{yaml_escape(author)}"')
+        note_author = (r.get("author") or fallback_author).strip()
+        authors.add(note_author)
+        if note_author:
+            L.append(f'author: "{yaml_escape(note_author)}"')
         if date_str:
             L.append(f"published: {date_str}")
         L.append(f"created: {time.strftime('%Y-%m-%d')}")
@@ -298,7 +301,8 @@ def main():
         log(f"  √ {md_name}  (图 {len(img_files)})")
 
     # 索引页
-    coll = f"小红书 · {author}合集" if author else "小红书笔记合集"
+    uniq = sorted(a for a in authors if a)
+    coll = f"小红书 · {uniq[0]}合集" if len(uniq) == 1 else "小红书笔记合集"
     idx = ["---", f'title: "{coll}"',
            f"created: {time.strftime('%Y-%m-%d')}", "tags:", "  - 小红书", "---", "",
            f"# {coll}", "",

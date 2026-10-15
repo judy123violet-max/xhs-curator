@@ -374,7 +374,7 @@ async function switchTab(t){
   grid.style.display = (t==='done') ? 'none' : 'grid';
   $('doneWrap').style.display = (t==='done') ? 'block' : 'none';
   $('listMeta').style.display = (t==='done') ? 'none' : 'block';
-  if(t==='done'){ renderDone(); return; }
+  if(t==='done'){ await loadManifest(); renderDone(); return; }
   $('grid').innerHTML = '<div class="empty">加载中…</div>';
   const d = await loadList(t);
   $('who').textContent = (DATA.main && DATA.main.ok) ? (DATA.main.nickname||'') : '';
@@ -583,6 +583,14 @@ $('kw').addEventListener('keydown', e=>{ if(e.key==='Enter') startSearch(); });
   await loadManifest();
   await switchTab('main');
   persist();
+  try{
+    const j = await (await fetch('/api/job')).json();
+    if(j.running){
+      $('logpanel').style.display = 'flex';
+      $('btnFetch').disabled = true; $('btnSearch').disabled = true;
+      pollJob();
+    }
+  }catch(e){}
 })();
 </script>
 </body>
