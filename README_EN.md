@@ -78,18 +78,21 @@ In short: **body text + text inside images + the author's comments**, all in you
 
 ## 📸 Screenshot
 
-![Picker workbench](docs/images/picker.jpg)
+![Curation workbench](docs/images/picker.jpg)
 
-The picker is a local web page: browse every note as cards, with select-all / invert / video-only / image-only / keyword filter. **Click a card to select it**, **click the title or "原文↗" to read the note right in this window** (press `Alt + ←` to come back — your selection is preserved).
+The workbench is a local web page with three persistent tabs: **Creator profile / Keyword search / Fetched notes**. Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to read the note right in this window** (press `Alt + ←` to come back — your selection is preserved).
 
 ## ✨ Features
 
 **Discovery & collection**
 
+- ✅ Curation workbench with three persistent tabs: creator profile / keyword search / fetched notes
 - ✅ Fetch a creator's full note list (profile URL / share short link / user ID)
-- ✅ Discover notes by keyword search
-- ✅ Visual picker: select-all / invert / video-only / image-only / keyword filter
+- ✅ Search by keyword right inside the page — no extra terminal
+- ✅ Visual selection: select-all / invert / video-only / image-only / keyword filter / **select-unfetched**
+- ✅ Fetched notes are badged automatically, reconciled with local download records
 - ✅ In-window note preview; selection auto-saved
+- ✅ One-click fetch from the page: the script runs in the background with live logs, badges refresh when done
 - ✅ Fetch body text, original images, official subtitles for videos
 - ✅ Author-only comments (including replies and pinned ones)
 - ✅ Resumable fetching (offset / count)
@@ -153,14 +156,18 @@ Or discover by keyword:
 python xhs_search_fetch.py --keyword "AI product manager interview" --count 40
 ```
 
-### 3. Open the picker
+### 3. Open the curation workbench
 
 ```bash
-python xhs_picker_server.py                                        # creator notes
-python xhs_picker_server.py --port 8789 --notes search_notes.json   # search results
+python xhs_picker_server.py
 ```
 
-Open `http://127.0.0.1:8788` (or 8789), select the notes you want, then click **保存选中清单** ("Save selection") — this writes `selection.json`.
+Open `http://127.0.0.1:8788` and switch freely between three tabs:
+
+- **Select** the notes you want ("select-unfetched" skips already-fetched ones; selection auto-saves)
+- **Keyword search**: switch to the search tab and search right in the page
+- **Fetch**: click the bottom-left button — the fetch script runs in the background with live logs, and badges refresh automatically
+- **Fetched notes**: track progress and open each note's local folder in one click
 
 ### 4. Fetch bodies and images
 

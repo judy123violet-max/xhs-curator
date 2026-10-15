@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-小红书关键词搜索 → 笔记列表（接勾选工作台）
+小红书关键词搜索 → 笔记列表（接采集工作台；也可直接在工作台「关键词搜索」页发起）
 
 用法:
     python xhs_search_fetch.py --keyword "AI产品经理 面试" [--count 50] [--sort 热门|最新]
@@ -183,7 +183,7 @@ def main():
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     log(f"[√] 收集 {len(items)} 条 → {OUT}")
-    log(f"    下一步: python xhs_picker_server.py --port 8789 --notes search_notes.json")
+    log(f"    下一步: 打开采集工作台 http://127.0.0.1:8788，「关键词搜索」页可直接查看")
 
 
 if __name__ == "__main__":

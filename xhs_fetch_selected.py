@@ -146,7 +146,7 @@ def main():
     args = ap.parse_args()
 
     if not os.path.exists(SEL):
-        log("[X] 找不到 selection.json —— 请先在勾选工作台点「保存选中清单」")
+        log("[X] 找不到 selection.json —— 请先在采集工作台勾选笔记（勾选自动保存）")
         return
     with open(SEL, encoding="utf-8") as f:
         sel = json.load(f)
