@@ -154,6 +154,40 @@ def manifest_items():
     return out
 
 
+DETAIL_PAGE = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>详情预览 · 采集工作台</title>
+<style>
+body{margin:0;font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+.bar{height:48px;background:#1d2129;color:#fff;display:flex;align-items:center;gap:12px;
+  padding:0 14px;position:sticky;top:0;z-index:9}
+.bar button{background:#ff2e4d;border:0;color:#fff;font-weight:600;font-size:14px;
+  padding:7px 16px;border-radius:8px;cursor:pointer}
+.bar button:hover{opacity:.88}
+.bar a{color:#ffd7dd;font-size:13px;text-decoration:none;
+  border:1px solid rgba(255,255,255,.28);padding:6px 12px;border-radius:8px}
+.bar .tip{color:rgba(255,255,255,.55);font-size:12px;margin-left:auto;text-align:right}
+iframe{width:100%;height:calc(100vh - 48px);border:0;display:block;background:#fff}
+</style>
+</head>
+<body>
+<div class="bar">
+  <button onclick="back()">&larr; 返回列表</button>
+  <a href="__URL__" target="_blank">浏览器打开&#8599;</a>
+  <span class="tip">按 Esc 也可返回<br>嵌套视图若提示登录属正常（不带登录态），点「浏览器打开」看完整版</span>
+</div>
+<iframe src="__URL__" allow="fullscreen"></iframe>
+<script>
+function back(){ location.href = '/'; }
+document.addEventListener('keydown', e => { if(e.key === 'Escape') back(); });
+</script>
+</body>
+</html>
+"""
+
 PAGE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -288,7 +322,7 @@ table.done td.t{font-weight:600;max-width:420px}
   <button class="primary" id="btnFetch" onclick="startFetch()">开始抓取</button>
   <button onclick="save()">保存选中清单</button>
   <button onclick="copySel()">复制清单文本</button>
-  <span class="tip" id="barTip">点卡片=勾选；点标题或「原文↗」在本窗口看详情，回来按 Alt+←，勾选不会丢</span>
+  <span class="tip" id="barTip">点卡片=勾选；点标题或「原文↗」在本窗口看详情，按 Esc 或「← 返回列表」回来，勾选不会丢</span>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -383,8 +417,8 @@ function render(){
       ${DONE.has(n.note_id) ? '<div class="tag tag-done">已抓过</div>' : ''}
       <div class="cb">${state.has(n.note_id) ? '✓' : ''}</div>
       <div class="body">
-        <a class="t" href="${link}" title="点开查看笔记详情（返回按 Alt+←，勾选已自动保存）" onclick="event.stopPropagation()">${esc(n.title) || '<span style="color:var(--sub)">(无标题)</span>'}</a>
-        <div class="s">${n.date || ''}　♥ ${n.liked || 0}　<a href="${link}" onclick="event.stopPropagation()">原文↗</a></div>
+        <a class="t" href="/detail?url=${encodeURIComponent(link)}" title="点开查看笔记详情（返回按 Esc 或左上角「返回列表」，勾选已自动保存）" onclick="event.stopPropagation()">${esc(n.title) || '<span style="color:var(--sub)">(无标题)</span>'}</a>
+        <div class="s">${n.date || ''}　♥ ${n.liked || 0}　<a href="/detail?url=${encodeURIComponent(link)}" onclick="event.stopPropagation()">原文↗</a></div>
       </div>`;
     d.onclick = ()=>{
       if(state.has(n.note_id)) state.delete(n.note_id); else state.add(n.note_id);
@@ -455,7 +489,7 @@ function renderDone(){
       <td>${it.date || ''}</td>
       <td>${it.comments ? it.comments + ' 条' : '—'}</td>
       <td>${it.folder ? `<button onclick="openFolder('${it.note_id}')">打开文件夹</button>` : ''}
-          ${it.url ? `<a href="${it.url}" target="_self" style="color:var(--brand);margin-left:6px">原文↗</a>` : ''}</td>
+          ${it.url ? `<a href="/detail?url=${encodeURIComponent(it.url)}" style="color:var(--brand);margin-left:6px">原文↗</a>` : ''}</td>
     </tr>`;
   });
   html += `</table><div class="meta" style="margin:-130px 22px 0">共 ${items.length} 篇 · 完成 ${okN} 篇 · 未完成 ${items.length-okN} 篇（未完成多是中断的，重跑「开始抓取」会自动续）</div>`;
@@ -635,6 +669,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)})
+            return
+
+        if u.path == "/detail":
+            src = qs.get("url", [""])[0]
+            host = urllib.parse.urlparse(src).netloc
+            if host not in ("www.xiaohongshu.com", "xiaohongshu.com"):
+                self._send(400, "bad url", "text/plain")
+                return
+            safe_src = src.replace('"', "%22")
+            self._send(200, DETAIL_PAGE.replace("__URL__", safe_src))
             return
 
         self._send(200, PAGE)

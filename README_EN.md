@@ -80,7 +80,7 @@ In short: **body text + text inside images + the author's comments**, all in you
 
 ![Curation workbench](docs/images/picker.jpg)
 
-The workbench is a local web page with three persistent tabs: **Creator profile / Keyword search / Fetched notes**. Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to read the note right in this window** (press `Alt + ←` to come back — your selection is preserved).
+The workbench is a local web page with three persistent tabs: **Creator profile / Keyword search / Fetched notes**. Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to preview the note in an embedded detail view** (press `Esc` or the "← 返回列表" button to come back — your selection is preserved).
 
 ## ✨ Features
 
@@ -236,6 +236,12 @@ Just run it again — completed notes are skipped automatically.
 <summary><b>Does it fetch other people's comments?</b></summary>
 
 Only comments posted by the creator, which often carry extra substance. Other users' comments are ignored.
+</details>
+
+<details>
+<summary><b>Why does the detail preview ask me to log in?</b></summary>
+
+The detail view is embedded, and browser cross-site rules mean it carries no login state. Close the dialog to read the note; for the full logged-in version (comments etc.), click "浏览器打开↗" at the top. This only affects previewing — selection and fetching are unaffected.
 </details>
 
 ## 🗺️ Roadmap
