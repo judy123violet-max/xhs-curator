@@ -4,12 +4,7 @@
 
 **简体中文 | <a href="README_EN.md">English</a>**
 
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/python-%E2%89%A53.10-blue?style=flat-square&logo=python&logoColor=white)](#-快速开始)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-快速开始)
-[![GitHub stars](https://img.shields.io/github/stars/judy123violet-max/xhs-curator?style=flat-square&color=fda7df)](https://github.com/judy123violet-max/xhs-curator/stargazers)
-
-<p>🔥 <b>把小红书笔记「看完再挑、挑完再导」地收进 Obsidian</b></p>
+<p>🔥 <b>把小红书笔记按需挑选的收进 Obsidian</b></p>
 
 </div>
 
