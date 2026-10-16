@@ -23,7 +23,7 @@
 
 A **visual pipeline** that collects Xiaohongshu (RedNote) notes into an Obsidian vault.
 
-Unlike "paste a link and import" tools, it first **lays out a creator's profile or your search results for you to browse** — you pick the notes you actually want. Then it fetches the note body, original images and **comments posted by the author**, transcribes text inside images into searchable text, and finally writes everything into your vault in Obsidian-native format.
+Two ways in: **whole profile** — it lays out a creator's profile or your search results for you to browse, and you pick the notes you actually want; **single note** — paste a share link and fetch it directly. Either way it fetches the note body, original images and **comments posted by the author**, transcribes text inside images into searchable text, and finally writes everything into your vault in Obsidian-native format.
 
 **Who it's for**: people who treat Xiaohongshu as an information source and want to keep it in a knowledge base (job-hunting notes, industry experience, tutorials, competitor research).
 
@@ -73,19 +73,19 @@ tags:
 > the full version from the author's comment is captured too)
 ```
 
-In short: **body text + text inside images + the author's comments**, all in your vault — no emoji in titles, no hashtag noise in the body.
+**What you end up with**: the body text, the text inside the images, and the author's comment replies — all three. No emoji in titles, no hashtag noise in the body; ready to read.
 
 ## 📸 Screenshot
 
 ![Curation workbench](docs/images/picker.jpg)
 
-The workbench is a local web page with three persistent tabs: **Creator profile / Keyword search / Fetched notes**. Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to preview the note in an embedded detail view** (press `Esc` or the "← 返回列表" button to come back — your selection is preserved).
+The workbench is a local web page with four persistent tabs: **Creator profile / Keyword search / Single note / Fetched notes**. Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to preview the note in an embedded detail view** (press `Esc` or the "← 返回列表" button to come back — your selection is preserved). **Single note tab**: paste a share link (or a whole share text block) → resolve → fetch, with already-fetched notes detected automatically.
 
 ## ✨ Features
 
 **Discovery & collection**
 
-- ✅ Curation workbench with three persistent tabs: creator profile / keyword search / fetched notes
+- ✅ Curation workbench with four persistent tabs: creator profile / keyword search / single note / fetched notes
 - ✅ Fetch a creator's full note list (profile URL / share short link / user ID)
 - ✅ Search by keyword right inside the page — no extra terminal
 - ✅ Visual selection: select-all / invert / video-only / image-only / keyword filter / **select-unfetched**
@@ -113,7 +113,7 @@ The workbench is a local web page with three persistent tabs: **Creator profile 
 | XHS-Downloader | CLI / userscript | Note links, account lists | ❌ bulk download | ❌ | ❌ | local files |
 | MediaCrawler | CLI crawler | Keyword / creator page | ❌ | ❌ | all comments | JSON / database |
 
-**In one line**: others help you save one note or one batch; this project helps you pick what's worth keeping from a whole creator profile, and import it — images, comments and all — cleanly.
+**Put simply**: other tools are about "saving"; this one is about "saving selectively, saving cleanly" — pick what's worth keeping from a whole creator profile, then import it with image text and comment replies included, all cleaned up.
 
 ## 🔗 Supported inputs
 
@@ -121,7 +121,7 @@ The workbench is a local web page with three persistent tabs: **Creator profile 
 |---|---|---|
 | Creator profile URL / short link / user ID | `xhs_creator_fetch.py` | `notes.json` |
 | Keyword | `xhs_search_fetch.py` | `search_notes.json` |
-| Single note URL | ☑️ planned (see roadmap) | — |
+| Single note URL or share text | `xhs_fetch_selected.py --url "<link>"` or the "Single note" tab | `downloads/` (same pipeline as bulk import) |
 
 Both list files feed directly into the picker (`--notes`).
 
@@ -161,7 +161,9 @@ python xhs_search_fetch.py --keyword "AI product manager interview" --count 40
 python xhs_picker_server.py
 ```
 
-Open `http://127.0.0.1:8788` and switch freely between three tabs:
+Open `http://127.0.0.1:8788` and switch freely between four tabs:
+
+- **Single note**: paste a share link or a whole share text block → resolve → fetch this note; already-fetched ones are detected
 
 - **Select** the notes you want ("select-unfetched" skips already-fetched ones; selection auto-saves)
 - **Keyword search**: switch to the search tab and search right in the page
@@ -252,7 +254,7 @@ The detail view is embedded, and browser cross-site rules mean it carries no log
 - [x] Tiered OCR classification
 - [x] Obsidian-native export
 - [x] Resumable fetching (offset / count)
-- [ ] Direct import from a single note URL
+- [x] Direct import from a single note URL (`--url` / the "Single note" tab; supports short links and whole share text blocks)
 - [ ] Config file for paths, ports and fetch rate
 - [ ] One-click installer
 
