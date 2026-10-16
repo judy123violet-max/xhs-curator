@@ -223,6 +223,7 @@ def filter_photo_captions(text):
 def render_author_comments(r):
     """博主的评论（只收博主本人的发言，常藏干货/补充链接）→ 输出到全文最末"""
     cs = r.get("author_comments") or []
+    cs = [c for c in cs if is_meaningful_comment(c)]   # 寒暄短评不入库
     out = []
     if not cs:
         return out
@@ -254,6 +255,32 @@ def _link_basename(link):
     if "--" in base:
         base = base.split("--")[-1]
     return base
+
+
+# 博主评论筛选（2026-10-16 雅旭拍板：评论和图片一样要分「有用/装饰」，
+# 寒暄短评——"往我心里埋来""想你了宝宝[doge]"——不值得入库，只留干货补充）
+CHITTY_RE = re.compile(
+    r"哈哈|嘿嘿|嘻|想你了?|爱你|么么|宝宝|宝子|姐妹|亲爱的|加油|冲呀|"
+    r"支持|沙发|路过|打卡|来了来了|赞一?个|互关|回关|已关|关注了")
+
+
+def is_meaningful_comment(c):
+    """单条博主评论是否值得入库（宁缺勿滥：被过滤的仍在 raw.json，可调规则重导）
+    - 归一化后 ≥20 字 → 有实质内容，保留
+    - 点赞 ≥10 → 高赞短评可能是金句/干货指引，保留
+    - 其余（寒暄词、<20 字的短互动、纯表情）→ 丢弃
+    """
+    text = c.get("content") or ""
+    try:
+        likes = int(c.get("likes") or 0)
+    except (TypeError, ValueError):
+        likes = 0
+    n = norm_para(text)
+    if len(n) >= 20:
+        return True
+    if likes >= 10:
+        return True
+    return False
 
 
 def load_prev_img_params(dest, md_name):
