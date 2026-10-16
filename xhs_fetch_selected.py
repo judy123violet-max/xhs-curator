@@ -476,7 +476,11 @@ def main():
 
             ntitle = data.get("title") or title
             if data.get("nickname"):
-                rec["author"] = data["nickname"]   # 按篇取真实作者，避免清单昵称张冠李戴
+                nick = data["nickname"]
+                # 页面 store 偶发截断全角括号（实测 03：'谷谷谷雨（秋招版' ）→ 补闭合
+                if nick.count("（") > nick.count("）"):
+                    nick += "）"
+                rec["author"] = nick   # 按篇取真实作者，避免清单昵称张冠李戴
             note_uid = str(data.get("userId") or "")
             folder = os.path.join(OUTDIR, f"{i:02d}_{sanitize(ntitle)}")
             os.makedirs(folder, exist_ok=True)

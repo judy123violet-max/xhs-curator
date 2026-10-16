@@ -396,6 +396,8 @@ def main():
                     help="只导出 downloads/ 目录名包含该字符串的笔记（单篇测试用）")
     ap.add_argument("--heading-style", default="hash", choices=["hash", "bold"],
                     help="正文小标题还原方式：hash=### 真标题（默认，可进大纲）；bold=**加粗**")
+    ap.add_argument("--frames", action="store_true",
+                    help="导出视频关键帧（默认关闭：视频产物 v2 由 AI 结构化整理判断干货）")
     args = ap.parse_args()
     dest = os.path.abspath(args.dest)
     fallback_author = (args.author or load_creator_nick()).strip()
@@ -477,13 +479,21 @@ def main():
             sub_rel = "subtitle.srt"
         frames = []
         fdir = os.path.join(SRC, d, "frames")
-        if os.path.isdir(fdir):
+        # v2：关键帧默认不导出（AI 结构化整理时代为判断干货，写进 structured.md），
+        # --frames 手动打开；关闭时旧帧文件会被幂等清理自动回收
+        if os.path.isdir(fdir) and args.frames:
             for fn in sorted(os.listdir(fdir)):
                 dst_name = f"{md_stem}--{fn}"
                 if copy_attachment(os.path.join(fdir, fn), os.path.join(att_root, dst_name)):
                     pass
                 used_atts.add(dst_name)
                 frames.append(fn)
+
+        # 视频结构化模式（AnyLink1号 视频产物 v2，雅旭 2026-10-16 20:58 验收）：
+        # 产物目录有 structured.md（AI 结构化整理产物）→ 正文整体替换为该文件内容，
+        # 原 desc/语音转写散稿/关键帧不再输出（原始 transcript.txt 留在产物目录可溯源）
+        structured_path = os.path.join(SRC, d, "structured.md")
+        structured_mode = (ntype == "视频") and os.path.exists(structured_path)
 
         # 幂等清理：attachments/ 里本篇前缀但本轮未产出的过期附件 → 回收站
         for stale in glob.glob(os.path.join(glob.escape(att_root), f"{glob.escape(md_stem)}--*")):
@@ -500,6 +510,9 @@ def main():
         L.append("---")
         L.append(f'title: "{yaml_escape(title)}"')
         note_author = (r.get("author") or fallback_author).strip()
+        # 旧数据兜底：作者昵称的全角括号偶发不闭合（抓取端截断）→ 补闭合
+        if note_author.count("（") > note_author.count("）"):
+            note_author += "）"
         authors.add(note_author)
         if note_author:
             L.append(f'author: "{yaml_escape(note_author)}"')
@@ -515,6 +528,19 @@ def main():
         for t in topic_tags:
             L.append(f"  - {t}")
         L.append(f"类型: {ntype}")
+        trans_src = ""
+        if ntype == "视频":
+            dur = r.get("video_duration") or 0
+            if dur:
+                L.append(f"时长: 约 {max(1, round(dur / 60))} 分钟")
+            if sub_rel:
+                trans_src = "官方字幕"
+            elif structured_mode:
+                trans_src = "本地 Whisper 语音转写（结构化整理）"
+            elif os.path.exists(os.path.join(SRC, d, "transcript.txt")):
+                trans_src = "本地 Whisper 语音转写"
+            if trans_src:
+                L.append(f"转写: {trans_src}")
         if r.get("liked"):
             L.append(f'点赞: "{r["liked"]}"')
         L.append("---")
@@ -522,7 +548,18 @@ def main():
 
         # 标题/日期/类型/点赞/原文链接不再重复输出：frontmatter 属性面板里都有
 
-        if desc_body:
+        if structured_mode:
+            # 结构化版替换正文（拍板 #3）：来源引用块 + structured.md 全文
+            with open(structured_path, encoding="utf-8") as f:
+                struct_body = f.read().strip()
+            L.append(f"> 来源：小红书视频，作者 **{note_author or '未知作者'}**")
+            if date_str:
+                L.append(f"> 发布：{date_str} ｜ 转写：本地 Whisper（结构化整理）")
+            L.append("> 原文链接：见 frontmatter source")
+            L.append("")
+            L.append(struct_body)
+            L.append("")
+        elif desc_body:
             L.append("## 正文")
             L.append("")
             L.append(desc_body)
@@ -555,7 +592,7 @@ def main():
             L.append("")
 
         tp = os.path.join(SRC, d, "transcript.txt")
-        if os.path.exists(tp):
+        if os.path.exists(tp) and not structured_mode:
             L.append("## 语音转写")
             L.append("")
             L.append("> 本视频无官方字幕，以下为本地 Whisper 语音转写，可能有少量识别误差。")
@@ -571,7 +608,7 @@ def main():
                 L.append(f"![[{md_stem}--{fn}]]")
             L.append("")
 
-        if r.get("type") == "video" and not sub_rel:
+        if r.get("type") == "video" and not sub_rel and not structured_mode:
             L.append("> [!warning] 该条为视频笔记，平台未提供官方字幕，正文识别可能不完整。")
             L.append("")
 
