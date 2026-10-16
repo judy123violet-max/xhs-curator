@@ -244,6 +244,48 @@ def load_prev_img_params(dest, md_name):
     return out
 
 
+def split_paras(text):
+    return [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+
+
+def para_covered(p, pool):
+    """段落 p 的文字是否已被 pool（归一化段落列表）覆盖"""
+    n = norm_para(p)
+    if len(n) < 8:
+        return True                       # 短句/语气行，视为无信息量
+    for q in pool:
+        if n in q or q in n:
+            return True
+        if difflib.SequenceMatcher(None, n, q).ratio() >= 0.8:
+            return True
+    return False
+
+
+def analyze_image_note(desc, ocr_text):
+    """判定「内容主要在图片上」的笔记（雅旭 2026-10-16 提的两类情况通用）
+
+    返回 (is_image_note, desc_body)：
+    - is_image_note：正文按字数加权覆盖率 ≥0.55，且 OCR 全文明显长于正文
+      （≥1.2 倍且 ≥200 字）→ 博主把完整内容放在图片里，正文只是引流/精简版
+    - desc_body：剔掉与图内文字重复的段落后的正文（避免图文同文重复展示）
+    """
+    desc_paras = split_paras(desc)
+    pool = [norm_para(p) for p in split_paras(ocr_text)]
+    pool = [q for q in pool if len(q) >= 8]
+    if not pool or not desc_paras:
+        return False, desc
+    total = sum(len(norm_para(p)) for p in desc_paras) or 1
+    covered = sum(len(norm_para(p)) for p in desc_paras
+                  if para_covered(p, pool))
+    cov = covered / total
+    ocr_len = sum(len(q) for q in pool)
+    is_img = cov >= 0.55 and ocr_len >= max(total * 1.2, 200)
+    if not is_img:
+        return False, desc
+    kept = [p for p in desc_paras if not para_covered(p, pool)]
+    return True, "\n\n".join(kept).strip()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", required=True)
@@ -251,6 +293,8 @@ def main():
                     help="博主昵称；默认读 selection.json，读不到则不写 author 字段")
     ap.add_argument("--extra-tags", default="",
                     help="额外的固定标签，逗号分隔（可选）")
+    ap.add_argument("--only", default="",
+                    help="只导出 downloads/ 目录名包含该字符串的笔记（单篇测试用）")
     args = ap.parse_args()
     dest = os.path.abspath(args.dest)
     fallback_author = (args.author or load_creator_nick()).strip()
@@ -269,6 +313,8 @@ def main():
     index_lines = []
     authors = set()
     for d in dirs:
+        if args.only and args.only not in d:
+            continue
         raw_p = os.path.join(SRC, d, "raw.json")
         if not os.path.exists(raw_p):
             continue
@@ -287,21 +333,32 @@ def main():
         topic_tags = extract_tags(desc_raw)
         desc = clean_body(desc_raw)   # 清洗后若为空就留空（标签已进 frontmatter）
 
-        # 附件目录
+        # 先读 OCR 判定笔记形态：内容主要在图片上 → 只留转录文字、不拷图
+        ocr_map = load_ocr(os.path.join(SRC, d)) if (r.get("images") or []) else {}
+        ocr_all = "\n\n".join(ocr_map.get(fn, "") for fn in (r.get("images") or [])
+                              if ocr_map.get(fn))
+        is_image_note, desc_body = analyze_image_note(desc, ocr_all)
+        keep_images = not is_image_note
+
+        # 附件目录（图片型笔记不建不拷，避免留空目录）
         att_name = safe(d)
         att_dir = os.path.join(att_root, att_name)
-        os.makedirs(att_dir, exist_ok=True)
         img_files = []
-        for fn in (r.get("images") or []):
-            sp = os.path.join(SRC, d, fn)
-            if os.path.exists(sp):
-                shutil.copy2(sp, os.path.join(att_dir, fn))
-                img_files.append(fn)
+        if keep_images:
+            os.makedirs(att_dir, exist_ok=True)
+            for fn in (r.get("images") or []):
+                sp = os.path.join(SRC, d, fn)
+                if os.path.exists(sp):
+                    shutil.copy2(sp, os.path.join(att_dir, fn))
+                    img_files.append(fn)
+        else:
+            img_files = list(r.get("images") or [])   # 仅用于遍历 OCR，不入库
 
         # 视频字幕/关键帧
         sub_rel = ""
         sp = os.path.join(SRC, d, "subtitle.srt")
         if os.path.exists(sp):
+            os.makedirs(att_dir, exist_ok=True)
             shutil.copy2(sp, os.path.join(att_dir, "subtitle.srt"))
             sub_rel = "subtitle.srt"
         frames = []
@@ -344,17 +401,23 @@ def main():
 
         # 标题/日期/类型/点赞/原文链接不再重复输出：frontmatter 属性面板里都有
 
-        if desc:
+        if desc_body:
             L.append("## 正文")
             L.append("")
-            L.append(desc)
+            L.append(desc_body)
             L.append("")
 
         if img_files:
-            ocr = load_ocr(os.path.join(SRC, d))
-            head = "## 图片" + ("与文字转录" if ocr else "")
+            ocr = ocr_map
+            if is_image_note:
+                head = "## 图片文字转录"
+            else:
+                head = "## 图片" + ("与文字转录" if ocr else "")
             L.append(head)
             L.append("")
+            if is_image_note:
+                L.append("> 原笔记内容以图片呈现，以下为图片文字转录；图片未入库。")
+                L.append("")
             prev_ocr = ""
             for fn in img_files:
                 raw_t = ocr.get(fn, "").strip()
@@ -362,11 +425,13 @@ def main():
                 t = filter_photo_captions(t)        # 照片/自拍类图注整段丢弃
                 if raw_t:
                     prev_ocr = raw_t
-                L.append(f"![[_附件/{att_name}/{fn}{prev_params.get(fn, '')}]]")
+                if keep_images:
+                    L.append(f"![[_附件/{att_name}/{fn}{prev_params.get(fn, '')}]]")
                 if t:
                     L.append("")
                     L.append(t)
-                L.append("")
+                if keep_images or t:
+                    L.append("")
 
         if sub_rel:
             L.append("## 视频字幕")
@@ -392,8 +457,10 @@ def main():
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(L))
         n_ok += 1
-        index_lines.append(f"| {date_str} | [[{safe(title)}]] | {ntype} | {len(img_files)} |")
-        log(f"  √ {md_name}  (图 {len(img_files)})")
+        img_col = f"{len(img_files)}（转文字）" if is_image_note else str(len(img_files))
+        index_lines.append(f"| {date_str} | [[{safe(title)}]] | {ntype} | {img_col} |")
+        log(f"  √ {md_name}  (图 {len(img_files)})"
+            + ("  [图片型：只留转录文字，未拷图]" if is_image_note else ""))
 
     # 索引页
     uniq = sorted(a for a in authors if a)
