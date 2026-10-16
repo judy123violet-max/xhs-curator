@@ -100,6 +100,26 @@ def one_line(s, n=90):
     return re.sub(r"\s+", " ", (s or "").strip())[:n]
 
 
+# 正文中独立成行的小标题 → 自动加粗（2026-10-16：小红书正文里的 "01｜xxx"、
+# "第一层是主干" 在 App 里是视觉标题，但 desc 字段是纯文本、不带任何标记，
+# 靠人工加粗太累，这里按固定句式还原。只认这两种写法，避免误伤普通句子。
+HEAD_RE = re.compile(
+    r"^(?:\d{1,2}\s*｜\s*[^。！？；\n]{2,26}[：:]?|"
+    r"第[一二三四五六七八九十]+[层步点][^。！？；\n]{0,14}[：:]?|"
+    r"(?:总结|小结|写在最后|写在前面|食用指南|重点|划重点|核心结论)[：:]?)$")
+
+
+def boldify_headings(text):
+    """把正文里独立成行的小标题加粗（不用 # 标题，避免打乱 Obsidian 大纲）"""
+    out = []
+    for ln in (text or "").split("\n"):
+        s = ln.strip()
+        if s and not s.startswith("**") and len(s) <= 34 and HEAD_RE.match(s):
+            s = f"**{s}**"
+        out.append(s)
+    return "\n".join(out)
+
+
 def load_ocr(folder):
     """读取该笔记目录下的 ocr.md，按 '## img_NN.jpg' 切成 {文件名: 转录文本}"""
     p = os.path.join(folder, "ocr.md")
@@ -344,6 +364,7 @@ def main():
         desc_raw = (r.get("desc") or "").strip()
         topic_tags = extract_tags(desc_raw)
         desc = clean_body(desc_raw)   # 清洗后若为空就留空（标签已进 frontmatter）
+        desc = boldify_headings(desc)  # 正文里的小标题（01｜xxx、第一层是主干）自动加粗
 
         # 先读 OCR 判定笔记形态：内容主要在图片上 → 只留转录文字、不拷图
         ocr_map = load_ocr(os.path.join(SRC, d)) if (r.get("images") or []) else {}
