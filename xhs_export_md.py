@@ -224,6 +224,16 @@ def render_author_comments(r):
     return out
 
 
+def _link_basename(link):
+    """从 wikilink 目标取文件名：兼容两种 Obsidian 写法
+    - `_附件/序号_标题/img_01.jpg`（本项目导出格式）
+    - `笔记名--img_01.jpg`（Obsidian「最短路径」设置重写后的格式）"""
+    base = (link or "").strip().split("/")[-1]
+    if "--" in base:
+        base = base.split("--")[-1]
+    return base
+
+
 def load_prev_img_params(dest, md_name):
     """读回用户手动加过的图片显示参数（如 |orig|left|0|400），重导时继承，避免覆盖手工排版"""
     p = os.path.join(dest, md_name)
@@ -236,9 +246,11 @@ def load_prev_img_params(dest, md_name):
                 m = re.match(r"^\s*!\[\[([^\]]+?)((?:\|[^\]]+)?)\]\]\s*$", ln)
                 if not m:
                     continue
-                fn = os.path.basename(m.group(1).strip())
-                if m.group(2):
-                    out[fn] = m.group(2)
+                fn = _link_basename(m.group(1))
+                params = m.group(2) or ""
+                # 只继承显示参数（|orig|left|0|400 这类），alias（|说明文字）不继承
+                if fn and params and re.fullmatch(r"\|[a-z0-9|]+", params):
+                    out[fn] = params
     except Exception:
         pass
     return out
