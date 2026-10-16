@@ -109,13 +109,15 @@ HEAD_RE = re.compile(
     r"(?:总结|小结|写在最后|写在前面|食用指南|重点|划重点|核心结论)[：:]?)$")
 
 
-def boldify_headings(text):
-    """把正文里独立成行的小标题加粗（不用 # 标题，避免打乱 Obsidian 大纲）"""
+def boldify_headings(text, style="hash"):
+    """把正文里独立成行的小标题变成真标题
+    style="hash" → `### 01｜总结了一个项目结构`（默认，可在 Obsidian 大纲里跳转）
+    style="bold" → `**01｜总结了一个项目结构：**`（不产生大纲条目）"""
     out = []
     for ln in (text or "").split("\n"):
         s = ln.strip()
-        if s and not s.startswith("**") and len(s) <= 34 and HEAD_RE.match(s):
-            s = f"**{s}**"
+        if s and not s.startswith(("**", "#")) and len(s) <= 34 and HEAD_RE.match(s):
+            s = ("### " + s.rstrip("：:")) if style == "hash" else f"**{s}**"
         out.append(s)
     return "\n".join(out)
 
@@ -294,28 +296,30 @@ def para_covered(p, pool):
 
 
 def analyze_image_note(desc, ocr_text):
-    """判定「内容主要在图片上」的笔记（雅旭 2026-10-16 提的两类情况通用）
+    """正文里与图内文字重复的段落 → 剔除（避免同一段内容在正文和图片转录里各出现一次）
 
-    返回 (is_image_note, desc_body)：
-    - is_image_note：正文按字数加权覆盖率 ≥0.55，且 OCR 全文明显长于正文
-      （≥1.2 倍且 ≥200 字）→ 博主把完整内容放在图片里，正文只是引流/精简版
-    - desc_body：剔掉与图内文字重复的段落后的正文（避免图文同文重复展示）
+    2026-10-16 起只做正文去重：是否去图改为**逐图判定**（见 has_substantive_text），
+    不再按整篇覆盖率一刀切——同一篇里可以"装饰图保留、干货图转文字"。
     """
     desc_paras = split_paras(desc)
     pool = [norm_para(p) for p in split_paras(ocr_text)]
     pool = [q for q in pool if len(q) >= 8]
     if not pool or not desc_paras:
-        return False, desc
-    total = sum(len(norm_para(p)) for p in desc_paras) or 1
-    covered = sum(len(norm_para(p)) for p in desc_paras
-                  if para_covered(p, pool))
-    cov = covered / total
-    ocr_len = sum(len(q) for q in pool)
-    is_img = cov >= 0.55 and ocr_len >= max(total * 1.2, 200)
-    if not is_img:
-        return False, desc
+        return desc
     kept = [p for p in desc_paras if not para_covered(p, pool)]
-    return True, "\n\n".join(kept).strip()
+    return "\n\n".join(kept).strip()
+
+
+CAPTION_ONLY_RE = re.compile(r"^（[^）]*）$")
+
+
+def has_substantive_text(t):
+    """这张图的转录里是否有「实质文字」（去掉纯括号说明后仍 ≥15 字）
+    - True  → 干货图：文字已转录，图是冗余 → 去图留文
+    - False → 界面截图（只有一行说明）或照片（无文字）→ 保留图
+    """
+    rest = [p for p in split_paras(t) if not CAPTION_ONLY_RE.match(p.strip())]
+    return len(norm_para(" ".join(rest))) >= 15
 
 
 def main():
@@ -327,6 +331,8 @@ def main():
                     help="额外的固定标签，逗号分隔（可选）")
     ap.add_argument("--only", default="",
                     help="只导出 downloads/ 目录名包含该字符串的笔记（单篇测试用）")
+    ap.add_argument("--heading-style", default="hash", choices=["hash", "bold"],
+                    help="正文小标题还原方式：hash=### 真标题（默认，可进大纲）；bold=**加粗**")
     args = ap.parse_args()
     dest = os.path.abspath(args.dest)
     fallback_author = (args.author or load_creator_nick()).strip()
@@ -364,28 +370,37 @@ def main():
         desc_raw = (r.get("desc") or "").strip()
         topic_tags = extract_tags(desc_raw)
         desc = clean_body(desc_raw)   # 清洗后若为空就留空（标签已进 frontmatter）
-        desc = boldify_headings(desc)  # 正文里的小标题（01｜xxx、第一层是主干）自动加粗
+        desc = boldify_headings(desc, args.heading_style)   # 正文小标题 → 真标题
 
-        # 先读 OCR 判定笔记形态：内容主要在图片上 → 只留转录文字、不拷图
+        # 逐图判定（2026-10-16 雅旭拍板，学 xhs-claude-skills 的逐图粒度）：
+        #   图内是干货长文 → 去图留文（文字已转录，图是冗余）
+        #   图内只有一行说明 / 没文字（界面截图、照片）→ 保留图
         ocr_map = load_ocr(os.path.join(SRC, d)) if (r.get("images") or []) else {}
-        ocr_all = "\n\n".join(ocr_map.get(fn, "") for fn in (r.get("images") or [])
-                              if ocr_map.get(fn))
-        is_image_note, desc_body = analyze_image_note(desc, ocr_all)
-        keep_images = not is_image_note
+        img_plan = []            # [(文件名, 转录文字, 是否保留图)]
+        prev_ocr = ""
+        for fn in (r.get("images") or []):
+            raw_t = ocr_map.get(fn, "").strip()
+            t = dedup_ocr(prev_ocr, raw_t)      # 相邻图重复段落消重
+            t = filter_photo_captions(t)        # 照片/自拍类图注整段丢弃
+            if raw_t:
+                prev_ocr = raw_t
+            img_plan.append((fn, t, not has_substantive_text(t)))
+        ocr_all = "\n\n".join(t for _, t, _ in img_plan if t)
+        desc_body = analyze_image_note(desc, ocr_all)   # 正文与图内文字去重
+        text_only = bool(img_plan) and not any(k for _, _, k in img_plan)
 
-        # 附件目录（图片型笔记不建不拷，避免留空目录）
+        # 附件目录：只拷需要保留的图；一张都不留时不建目录
         att_name = safe(d)
         att_dir = os.path.join(att_root, att_name)
         img_files = []
-        if keep_images:
-            os.makedirs(att_dir, exist_ok=True)
-            for fn in (r.get("images") or []):
-                sp = os.path.join(SRC, d, fn)
-                if os.path.exists(sp):
-                    shutil.copy2(sp, os.path.join(att_dir, fn))
-                    img_files.append(fn)
-        else:
-            img_files = list(r.get("images") or [])   # 仅用于遍历 OCR，不入库
+        for fn, _t, keep in img_plan:
+            if not keep:
+                continue
+            sp = os.path.join(SRC, d, fn)
+            if os.path.exists(sp):
+                os.makedirs(att_dir, exist_ok=True)
+                shutil.copy2(sp, os.path.join(att_dir, fn))
+                img_files.append(fn)
 
         # 视频字幕/关键帧
         sub_rel = ""
@@ -440,30 +455,24 @@ def main():
             L.append(desc_body)
             L.append("")
 
-        if img_files:
-            ocr = ocr_map
-            if is_image_note:
+        if img_plan:
+            any_text = any(t for _, t, _ in img_plan)
+            if text_only:
                 head = "## 图片文字转录"
             else:
-                head = "## 图片" + ("与文字转录" if ocr else "")
+                head = "## 图片" + ("与文字转录" if any_text else "")
             L.append(head)
             L.append("")
-            if is_image_note:
+            if text_only:
                 L.append("> 原笔记内容以图片呈现，以下为图片文字转录；图片未入库。")
                 L.append("")
-            prev_ocr = ""
-            for fn in img_files:
-                raw_t = ocr.get(fn, "").strip()
-                t = dedup_ocr(prev_ocr, raw_t)      # 相邻图重复段落消重
-                t = filter_photo_captions(t)        # 照片/自拍类图注整段丢弃
-                if raw_t:
-                    prev_ocr = raw_t
-                if keep_images:
+            for fn, t, keep in img_plan:
+                if keep:
                     L.append(f"![[_附件/{att_name}/{fn}{prev_params.get(fn, '')}]]")
                 if t:
                     L.append("")
                     L.append(t)
-                if keep_images or t:
+                if keep or t:
                     L.append("")
 
         if sub_rel:
@@ -490,10 +499,17 @@ def main():
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(L))
         n_ok += 1
-        img_col = f"{len(img_files)}（转文字）" if is_image_note else str(len(img_files))
+        if text_only:
+            img_col = f"{len(img_plan)}（转文字）"
+        elif len(img_files) < len(img_plan):
+            img_col = f"{len(img_files)}/{len(img_plan)}"    # 部分图转文字、部分保留
+        else:
+            img_col = str(len(img_files))
         index_lines.append(f"| {date_str} | [[{safe(title)}]] | {ntype} | {img_col} |")
-        log(f"  √ {md_name}  (图 {len(img_files)})"
-            + ("  [图片型：只留转录文字，未拷图]" if is_image_note else ""))
+        log(f"  √ {md_name}  (图 {len(img_files)}/{len(img_plan)})"
+            + ("  [全文转文字，未拷图]" if text_only
+               else (f"  [{len(img_plan) - len(img_files)} 张干货图转文字]"
+                     if len(img_files) < len(img_plan) else "")))
 
     # 索引页
     uniq = sorted(a for a in authors if a)
