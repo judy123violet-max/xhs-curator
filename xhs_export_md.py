@@ -11,6 +11,7 @@
     <dest>/_附件/<序号_标题>/img_*.jpg  # 原图（wikilink 引用）
 """
 import argparse
+import difflib
 import json
 import os
 import re
@@ -134,6 +135,115 @@ def load_creator_nick():
         return ""
 
 
+def norm_para(s):
+    """段落归一化：去 markdown 符号和空白，仅用于重复比较"""
+    return re.sub(r"[\s*#>`~\-—]+", "", s or "")
+
+
+def _similar(a, b):
+    """两段归一化文本是否高度重复"""
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.75
+
+
+def dedup_ocr(prev_text, cur_text):
+    """相邻两张图的 OCR 去重：后者中与前者重复的段落整段删除。
+
+    博主常把题目/引导语印在每张长图顶部（封面 + 每张正文图各一遍），
+    逐图 OCR 会把同样的文字转写多次，这里按段落比对消掉。
+    只跟紧邻的前一张图比，且段落归一化后需 >=12 字才参与比较，避免误伤短句。
+    """
+    if not prev_text or not cur_text:
+        return cur_text
+    prev_paras = [norm_para(p) for p in prev_text.split("\n\n") if p.strip()]
+    prev_paras = [p for p in prev_paras if len(p) >= 12]
+    if not prev_paras:
+        return cur_text
+    out = []
+    for p in cur_text.split("\n\n"):
+        s = p.strip()
+        if not s:
+            continue
+        n = norm_para(s)
+        if len(n) >= 12 and any(_similar(n, q) for q in prev_paras):
+            continue
+        out.append(s)
+    return "\n\n".join(out)
+
+
+# 「照片/自拍类」图注一律不输出（雅旭 2026-10-16 拍板：自拍、风景、氛围照旁边什么都不写）
+PHOTO_CAP_KW = re.compile(r"自拍|照片|人物|拼图|表情包|贴纸|真人|露脸")
+
+
+def is_photo_caption(s):
+    """整行是「（…）」形式、且属于照片/自拍类的图注 → True（导出时整段丢弃）"""
+    t = (s or "").strip()
+    if not (t.startswith("（") and t.endswith("）")):
+        return False
+    inner = t[1:-1].strip()
+    if inner.startswith("照片") or inner.startswith("自拍"):
+        return True
+    return bool(PHOTO_CAP_KW.search(inner))
+
+
+def filter_photo_captions(text):
+    """按段落过滤掉照片类图注，其余原样保留（App 界面截图说明仍保留一行）"""
+    if not text:
+        return ""
+    keep = [p for p in text.split("\n\n")
+            if p.strip() and not is_photo_caption(p)]
+    return "\n\n".join(keep)
+
+
+def render_author_comments(r):
+    """博主的评论（只收博主本人的发言，常藏干货/补充链接）→ 输出到全文最末"""
+    cs = r.get("author_comments") or []
+    out = []
+    if not cs:
+        return out
+    out.append("## 博主的评论")
+    out.append("")
+    for c in cs:
+        t = c.get("time")
+        if t and t > 1e12:
+            t = t / 1000
+        ts = time.strftime("%Y-%m-%d", time.localtime(t)) if t else ""
+        pre = "【置顶】" if c.get("pinned") else ""
+        lk = f"（♥ {c['likes']}）" if c.get("likes") else ""
+        body = clean_body(c.get("content"))
+        out.append(f"**{pre}{ts}**" if ts else f"**{pre}**")
+        out.append("")
+        out.append(body or "（空）")
+        if lk:
+            out.append("")
+            out.append(lk)
+        out.append("")
+    return out
+
+
+def load_prev_img_params(dest, md_name):
+    """读回用户手动加过的图片显示参数（如 |orig|left|0|400），重导时继承，避免覆盖手工排版"""
+    p = os.path.join(dest, md_name)
+    if not os.path.exists(p):
+        return {}
+    out = {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            for ln in f:
+                m = re.match(r"^\s*!\[\[([^\]]+?)((?:\|[^\]]+)?)\]\]\s*$", ln)
+                if not m:
+                    continue
+                fn = os.path.basename(m.group(1).strip())
+                if m.group(2):
+                    out[fn] = m.group(2)
+    except Exception:
+        pass
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", required=True)
@@ -203,6 +313,10 @@ def main():
                 shutil.copy2(os.path.join(fdir, fn), os.path.join(outdir, fn))
                 frames.append(fn)
 
+        md_name = safe(title) + ".md"
+        # 继承上次导出时用户手加的图片显示参数（|left|400 之类），避免重导覆盖手工排版
+        prev_params = load_prev_img_params(dest, md_name)
+
         # 组装 markdown
         L = []
         L.append("---")
@@ -236,40 +350,19 @@ def main():
             L.append(desc)
             L.append("")
 
-        # 博主的评论（只收博主本人的发言，常藏干货/补充链接）
-        if r.get("author_comments"):
-            L.append("## 博主的评论")
-            L.append("")
-            for c in r["author_comments"]:
-                t = c.get("time")
-                if t and t > 1e12:
-                    t = t / 1000
-                ts = time.strftime("%Y-%m-%d", time.localtime(t)) if t else ""
-                pre = "【置顶】" if c.get("pinned") else ""
-                lk = f"（♥ {c['likes']}）" if c.get("likes") else ""
-                body = clean_body(c.get("content"))
-                L.append(f"**{pre}{ts}**" if ts else f"**{pre}**")
-                L.append("")
-                L.append(body or "（空）")
-                if lk:
-                    L.append("")
-                    L.append(lk)
-                L.append("")
-
         if img_files:
             ocr = load_ocr(os.path.join(SRC, d))
             head = "## 图片" + ("与文字转录" if ocr else "")
             L.append(head)
             L.append("")
+            prev_ocr = ""
             for fn in img_files:
-                t = ocr.get(fn, "").strip()
-                if t == "（照片）":
-                    # 纯自拍/风景照片：只保留图片本身，不加标题和说明
-                    L.append(f"![[_附件/{att_name}/{fn}]]")
-                    L.append("")
-                    continue
-                L.append(f"### {fn}")
-                L.append(f"![[_附件/{att_name}/{fn}]]")
+                raw_t = ocr.get(fn, "").strip()
+                t = dedup_ocr(prev_ocr, raw_t)      # 相邻图重复段落消重
+                t = filter_photo_captions(t)        # 照片/自拍类图注整段丢弃
+                if raw_t:
+                    prev_ocr = raw_t
+                L.append(f"![[_附件/{att_name}/{fn}{prev_params.get(fn, '')}]]")
                 if t:
                     L.append("")
                     L.append(t)
@@ -292,7 +385,9 @@ def main():
             L.append("> [!warning] 该条为视频笔记，平台未提供官方字幕，正文识别可能不完整。")
             L.append("")
 
-        md_name = safe(title) + ".md"
+        # 博主的评论统一放到全文最末（正文 / 图片 / 字幕 / 关键帧 都之后）
+        L.extend(render_author_comments(r))
+
         md_path = os.path.join(dest, md_name)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write("\n".join(L))

@@ -63,12 +63,11 @@ tags:
 
 ![[_附件/01_…/img_01.jpg]]
 
-### img_02.jpg
 ![[_附件/01_…/img_02.jpg]]
 （key text inside the image, transcribed verbatim, headings and lists kept）
-（selfies and scenery shots keep only the image, no caption）
+（selfies, scenery and mood shots keep only the image — no caption at all）
 
-## 博主的评论
+## 博主的评论                     ← always last in the note
 
 > 03｜… (the body said "running out of space, see comments" —
 > the full version from the author's comment is captured too)
