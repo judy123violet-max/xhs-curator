@@ -8,10 +8,11 @@
 
 产出:
     <dest>/<标题>.md                 # 带 frontmatter 的笔记
-    <dest>/_附件/<序号_标题>/img_*.jpg  # 原图（wikilink 引用）
+    <dest>/attachments/<笔记标题>--img_*.jpg  # 原图（wikilink 引用，单层目录）
 """
 import argparse
 import difflib
+import glob
 import json
 import os
 import re
@@ -249,12 +250,47 @@ def render_author_comments(r):
 
 def _link_basename(link):
     """从 wikilink 目标取文件名：兼容两种 Obsidian 写法
-    - `_附件/序号_标题/img_01.jpg`（本项目导出格式）
-    - `笔记名--img_01.jpg`（Obsidian「最短路径」设置重写后的格式）"""
+    - `_附件/序号_标题/img_01.jpg`（旧导出格式）
+    - `笔记名--img_01.jpg`（2026-10-16 契约格式 / Obsidian「最短路径」重写后的格式）"""
     base = (link or "").strip().split("/")[-1]
     if "--" in base:
         base = base.split("--")[-1]
     return base
+
+
+def copy_attachment(src, dst):
+    """幂等拷贝：目标已存在且大小一致就跳过（重复导出零差异）"""
+    if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
+        return False
+    shutil.copy2(src, dst)
+    return True
+
+
+def recycle_file(path):
+    """把过期附件移入系统回收站（可恢复），不做永久删除"""
+    try:
+        import ctypes
+        import ctypes.wintypes as w
+        FO_DELETE = 3
+        FOF_SILENT, FOF_NOCONFIRMATION = 0x4, 0x10
+        FOF_ALLOWUNDO, FOF_NOERRORUI = 0x40, 0x400
+
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [("hwnd", w.HWND), ("wFunc", w.UINT),
+                        ("pFrom", w.LPCWSTR), ("pTo", w.LPCWSTR),
+                        ("fFlags", w.WORD), ("fAnyOperationsAborted", w.BOOL),
+                        ("hNameMappings", ctypes.c_void_p),
+                        ("lpszProgressTitle", w.LPCWSTR)]
+
+        op = SHFILEOPSTRUCTW()
+        op.wFunc = FO_DELETE
+        op.pFrom = os.path.abspath(path) + "\0"
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+        ctypes.windll.shell32.SHFileOperationW.restype = ctypes.c_int
+        ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        return not os.path.exists(path)
+    except Exception:
+        return False
 
 
 # 博主评论筛选（2026-10-16 雅旭拍板：评论和图片一样要分「有用/装饰」，
@@ -369,7 +405,7 @@ def main():
         log(f"[X] 找不到 {SRC} —— 请先运行 xhs_fetch_selected.py 抓取笔记")
         return
 
-    att_root = os.path.join(dest, "_附件")
+    att_root = os.path.join(dest, "attachments")   # 2026-10-16 契约：单层 attachments/（对齐 vault 设置）
     os.makedirs(att_root, exist_ok=True)
 
     dirs = sorted(d for d in os.listdir(SRC)
@@ -416,34 +452,44 @@ def main():
         desc_body = analyze_image_note(desc, ocr_all)   # 正文与图内文字去重
         text_only = bool(img_plan) and not any(k for _, _, k in img_plan)
 
-        # 附件目录：只拷需要保留的图；一张都不留时不建目录
-        att_name = safe(d)
-        att_dir = os.path.join(att_root, att_name)
-        img_files = []
+        # 附件（2026-10-16 契约）：单层 attachments/，文件名 <笔记标题>--<原名>，
+        # 重跑幂等（存在且大小一致跳过 + 清理本篇过期附件走回收站）
+        md_stem = safe(title)              # 与笔记文件同名（无扩展名），附件前缀
+        used_atts = set()                  # 本篇产出的附件目标名（用于幂等清理）
+        img_files = []                     # 原文件名列表（引用时拼 <md_stem>--<fn>）
         for fn, _t, keep in img_plan:
             if not keep:
                 continue
             sp = os.path.join(SRC, d, fn)
             if os.path.exists(sp):
-                os.makedirs(att_dir, exist_ok=True)
-                shutil.copy2(sp, os.path.join(att_dir, fn))
+                dst_name = f"{md_stem}--{fn}"
+                copy_attachment(sp, os.path.join(att_root, dst_name))
+                used_atts.add(dst_name)
                 img_files.append(fn)
 
-        # 视频字幕/关键帧
+        # 视频字幕/关键帧（摊平进 attachments/，不再建子目录）
         sub_rel = ""
         sp = os.path.join(SRC, d, "subtitle.srt")
         if os.path.exists(sp):
-            os.makedirs(att_dir, exist_ok=True)
-            shutil.copy2(sp, os.path.join(att_dir, "subtitle.srt"))
+            dst_name = f"{md_stem}--subtitle.srt"
+            copy_attachment(sp, os.path.join(att_root, dst_name))
+            used_atts.add(dst_name)
             sub_rel = "subtitle.srt"
         frames = []
         fdir = os.path.join(SRC, d, "frames")
         if os.path.isdir(fdir):
-            outdir = os.path.join(att_dir, "frames")
-            os.makedirs(outdir, exist_ok=True)
             for fn in sorted(os.listdir(fdir)):
-                shutil.copy2(os.path.join(fdir, fn), os.path.join(outdir, fn))
+                dst_name = f"{md_stem}--{fn}"
+                if copy_attachment(os.path.join(fdir, fn), os.path.join(att_root, dst_name)):
+                    pass
+                used_atts.add(dst_name)
                 frames.append(fn)
+
+        # 幂等清理：attachments/ 里本篇前缀但本轮未产出的过期附件 → 回收站
+        for stale in glob.glob(os.path.join(glob.escape(att_root), f"{glob.escape(md_stem)}--*")):
+            if os.path.basename(stale) not in used_atts:
+                if recycle_file(stale):
+                    log(f"     · 清理过期附件: {os.path.basename(stale)}")
 
         md_name = safe(title) + ".md"
         # 继承上次导出时用户手加的图片显示参数（|left|400 之类），避免重导覆盖手工排版
@@ -495,7 +541,7 @@ def main():
                 L.append("")
             for fn, t, keep in img_plan:
                 if keep:
-                    L.append(f"![[_附件/{att_name}/{fn}{prev_params.get(fn, '')}]]")
+                    L.append(f"![[{md_stem}--{fn}{prev_params.get(fn, '')}]]")
                 if t:
                     L.append("")
                     L.append(t)
@@ -505,7 +551,7 @@ def main():
         if sub_rel:
             L.append("## 视频字幕")
             L.append("")
-            L.append(f"![[_附件/{att_name}/{sub_rel}]]")
+            L.append(f"![[{md_stem}--{sub_rel}]]")
             L.append("")
 
         tp = os.path.join(SRC, d, "transcript.txt")
@@ -522,7 +568,7 @@ def main():
             L.append("## 视频关键帧")
             L.append("")
             for fn in frames:
-                L.append(f"![[_附件/{att_name}/frames/{fn}]]")
+                L.append(f"![[{md_stem}--{fn}]]")
             L.append("")
 
         if r.get("type") == "video" and not sub_rel:
@@ -554,7 +600,7 @@ def main():
     idx = ["---", f'title: "{coll}"',
            f"created: {time.strftime('%Y-%m-%d')}", "tags:", "  - 小红书", "---", "",
            f"# {coll}", "",
-           f"导出时间：{time.strftime('%Y-%m-%d %H:%M')}　共 {n_ok} 篇", "",
+           f"导出时间：{time.strftime('%Y-%m-%d %H:%M')}　共 {n_ok} 篇（图片列 = 保留为图/图片总数：干货图按设计转成文字、不再嵌图）", "",
            "| 发布日期 | 笔记 | 类型 | 图片 |", "|---|---|---|---|"] + index_lines
     with open(os.path.join(dest, "00 索引.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(idx) + "\n")
