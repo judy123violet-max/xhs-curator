@@ -5,9 +5,10 @@
 用法:
     python xhs_picker_server.py [--port 8788] [--notes notes.json]
 
-同一页面三个常驻入口（切换不用重启服务）:
+同一页面四个常驻入口（切换不用重启服务）:
     [博主主页]   notes.json（--notes 可换源），卡片可勾选
     [关键词搜索] search_notes.json；页内输入关键词即可后台跑 xhs_search_fetch.py
+    [单篇导入]   粘贴笔记链接/短链/分享文字 → 解析 → 抓取这一篇（最初的单篇直抓）
     [已抓笔记]   downloads/_manifest.json 状态一览，可一键打开本地文件夹
 
 其他:
@@ -38,6 +39,11 @@ DOWNLOADS = os.path.join(BASE, "downloads")
 FETCH_SCRIPT = os.path.join(BASE, "xhs_fetch_selected.py")
 SEARCH_SCRIPT = os.path.join(BASE, "xhs_search_fetch.py")
 
+try:  # 单篇直抓的链接解析复用抓取脚本里的实现
+    from xhs_fetch_selected import resolve_note_link
+except Exception:
+    resolve_note_link = None
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
@@ -57,7 +63,7 @@ JOB = {"proc": None, "lines": collections.deque(maxlen=800),
 JOB_LOCK = threading.Lock()
 
 
-def start_job(jtype, keyword=""):
+def start_job(jtype, keyword="", url=""):
     with JOB_LOCK:
         p = JOB.get("proc")
         if p and p.poll() is None:
@@ -65,6 +71,12 @@ def start_job(jtype, keyword=""):
         if jtype == "fetch":
             script = FETCH_SCRIPT
             cmd = [sys.executable, script]
+        elif jtype == "one":
+            url = (url or "").strip()
+            if not url:
+                return False, "缺少要抓取的笔记链接"
+            script = FETCH_SCRIPT
+            cmd = [sys.executable, script, "--url", url]
         elif jtype == "search":
             keyword = (keyword or "").strip()
             if not keyword:
@@ -286,6 +298,7 @@ table.done td.t{font-weight:600;max-width:420px}
   <nav class="tabs">
     <button class="tab active" data-tab="main" onclick="switchTab('main')">博主主页</button>
     <button class="tab" data-tab="search" onclick="switchTab('search')">关键词搜索</button>
+    <button class="tab" data-tab="one" onclick="switchTab('one')">单篇导入</button>
     <button class="tab" data-tab="done" onclick="switchTab('done')">已抓笔记</button>
   </nav>
   <div class="tools" id="toolsList">
@@ -303,11 +316,18 @@ table.done td.t{font-weight:600;max-width:420px}
     <button class="primary" id="btnSearch" onclick="startSearch()">搜 索</button>
     <span class="meta">后台跑搜索脚本，结果存 search_notes.json，可与主页清单混选一起抓</span>
   </div>
+  <div class="tools" id="toolsOne" style="display:none">
+    <input type="text" id="oneUrl" placeholder="粘贴笔记分享链接或整段分享文字（支持 xhslink.cn 短链）" style="min-width:430px;flex:1">
+    <button id="btnResolve" onclick="resolveOne()">解 析</button>
+    <button class="teal" id="btnFetchOne" onclick="fetchOne()" disabled>抓取这篇</button>
+  </div>
+  <div class="meta" id="oneMeta" style="margin-top:6px;display:none"></div>
   <div class="meta" id="listMeta" style="margin-top:6px"></div>
 </header>
 
 <div class="grid" id="grid"></div>
 <div id="doneWrap" style="display:none"></div>
+<div id="oneWrap" style="display:none"></div>
 
 <div class="logpanel" id="logpanel" style="display:none">
   <div class="lh">
@@ -318,7 +338,7 @@ table.done td.t{font-weight:600;max-width:420px}
   <pre id="log"></pre>
 </div>
 
-<div class="bar">
+<div class="bar" id="bar">
   <button class="primary" id="btnFetch" onclick="startFetch()">开始抓取</button>
   <button onclick="save()">保存选中清单</button>
   <button onclick="copySel()">复制清单文本</button>
@@ -369,12 +389,25 @@ async function loadManifest(){
 async function switchTab(t){
   cur = t;
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===t));
-  $('toolsList').style.display  = (t==='done') ? 'none' : 'flex';
+  $('toolsList').style.display  = (t==='done' || t==='one') ? 'none' : 'flex';
   $('toolsSearch').style.display= (t==='search') ? 'flex' : 'none';
-  grid.style.display = (t==='done') ? 'none' : 'grid';
+  $('toolsOne').style.display   = (t==='one') ? 'flex' : 'none';
+  $('oneMeta').style.display    = (t==='one') ? 'block' : 'none';
+  grid.style.display = (t==='done' || t==='one') ? 'none' : 'grid';
   $('doneWrap').style.display = (t==='done') ? 'block' : 'none';
-  $('listMeta').style.display = (t==='done') ? 'none' : 'block';
+  $('oneWrap').style.display  = (t==='one') ? 'block' : 'none';
+  $('listMeta').style.display = (t==='done' || t==='one') ? 'none' : 'block';
+  $('bar').style.display = (t==='one') ? 'none' : 'flex';
+  $('logpanel').style.bottom = (t==='one') ? '0' : '57px';
   if(t==='done'){ await loadManifest(); renderDone(); return; }
+  if(t==='one'){
+    await loadManifest();
+    $('oneWrap').innerHTML = `<div class="empty">把小红书笔记链接粘贴到上面框里，点「解 析」<br>
+      支持 <code>xhslink.cn</code> 短链、<code>xiaohongshu.com</code> 完整链接，或整段分享文字<br>
+      解析成功后会显示笔记信息，点「抓取这篇」即可（抓完自动进「已抓笔记」）<br>
+      <span class="meta">之后导出 Obsidian：<code>python xhs_export_md.py --dest &lt;你的库目录&gt;</code></span></div>`;
+    return;
+  }
   $('grid').innerHTML = '<div class="empty">加载中…</div>';
   const d = await loadList(t);
   $('who').textContent = (DATA.main && DATA.main.ok) ? (DATA.main.nickname||'') : '';
@@ -512,8 +545,10 @@ async function jobStart(payload){
     if(!j.ok){ toast(j.error || '启动失败', '#e64545'); return false; }
     $('logpanel').style.display = 'flex';
     $('log').textContent = '';
-    $('logStatus').textContent = payload.type==='fetch' ? '抓取运行中…' : '搜索运行中…';
+    $('logStatus').textContent = payload.type==='fetch' ? '抓取运行中…'
+      : payload.type==='one' ? '单篇抓取运行中…' : '搜索运行中…';
     $('btnFetch').disabled = true; $('btnSearch').disabled = true;
+    $('btnResolve').disabled = true; $('btnFetchOne').disabled = true;
     pollJob();
     return true;
   }catch(e){ toast('启动失败: ' + e, '#e64545'); return false; }
@@ -527,6 +562,42 @@ function startSearch(){
   if(!kw){ toast('先输入关键词', '#e64545'); return; }
   jobStart({type:'search', keyword:kw});
 }
+
+/* ---------- 单篇导入 ---------- */
+let oneResolved = null;   // {note_id, type, url}
+async function resolveOne(){
+  const txt = $('oneUrl').value.trim();
+  if(!txt){ toast('先粘贴笔记链接', '#e64545'); return; }
+  $('btnResolve').disabled = true;
+  try{
+    const r = await fetch('/api/resolve', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text:txt})});
+    const j = await r.json();
+    if(!j.ok){
+      oneResolved = null;
+      $('btnFetchOne').disabled = true;
+      $('oneMeta').innerHTML = '<span style="color:var(--brand)">解析失败：' + esc(j.error||'') + '</span>';
+      return;
+    }
+    oneResolved = j;
+    const done = DONE.has(j.note_id);
+    $('oneMeta').innerHTML = '解析成功 · note_id <code>' + j.note_id + '</code> · '
+      + (j.type==='video' ? '视频' : '图文')
+      + (done ? ' · <b style="color:var(--teal)">已抓过（重抓会覆盖原目录）</b>' : ' · 尚未抓过');
+    $('btnFetchOne').disabled = false;
+    $('btnFetchOne').textContent = done ? '重新抓取' : '抓取这篇';
+  }catch(e){
+    oneResolved = null;
+    $('btnFetchOne').disabled = true;
+    $('oneMeta').innerHTML = '<span style="color:var(--brand)">解析失败：' + esc(String(e)) + '</span>';
+  }
+  $('btnResolve').disabled = false;
+}
+function fetchOne(){
+  if(!oneResolved){ toast('先点「解 析」认出这篇笔记', '#e64545'); return; }
+  jobStart({type:'one', url: oneResolved.url});
+}
+$('oneUrl').addEventListener('keydown', e=>{ if(e.key==='Enter') resolveOne(); });
 function stopJob(){ fetch('/job/stop', {method:'POST'}); }
 function toggleLog(){ $('logpanel').style.display = 'none'; }
 
@@ -538,15 +609,24 @@ function pollJob(){
     const pre = $('log');
     pre.textContent = (j.lines||[]).join('\n');
     pre.scrollTop = pre.scrollHeight;
-    if(j.running){ $('logStatus').textContent = (j.type==='fetch'?'抓取':'搜索') + '运行中…'; return; }
+    if(j.running){
+      $('logStatus').textContent = (j.type==='fetch' ? '抓取'
+        : j.type==='one' ? '单篇抓取' : '搜索') + '运行中…';
+      return;
+    }
     clearInterval(timer); polling = false;
     $('btnFetch').disabled = false; $('btnSearch').disabled = false;
+    $('btnResolve').disabled = false;
+    $('btnFetchOne').disabled = !oneResolved;
     $('logStatus').textContent = j.status==='done' ? '✓ 任务完成' : '任务失败';
     await loadManifest();
     if(j.type==='search'){ await loadList('search', true); if(cur==='search') render(); }
-    if(cur==='done') renderDone(); else if(cur!=='done') render();
+    if(cur==='done') renderDone(); else if(cur!=='done' && cur!=='one') render();
     if(j.type==='fetch' && j.status==='done'){
       toast('抓取完成！卡片已打上「已抓过」标记', 'var(--teal)');
+      if(cur!=='done') switchTab('done');
+    } else if(j.type==='one' && j.status==='done'){
+      toast('抓取完成！已加入「已抓笔记」', 'var(--teal)');
       if(cur!=='done') switchTab('done');
     } else if(j.status==='done'){
       toast('完成');
@@ -588,6 +668,7 @@ $('kw').addEventListener('keydown', e=>{ if(e.key==='Enter') startSearch(); });
     if(j.running){
       $('logpanel').style.display = 'flex';
       $('btnFetch').disabled = true; $('btnSearch').disabled = true;
+      $('btnResolve').disabled = true; $('btnFetchOne').disabled = true;
       pollJob();
     }
   }catch(e){}
@@ -726,8 +807,22 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/job/start":
             ok, msg = start_job(payload.get("type", ""),
-                                payload.get("keyword", ""))
+                                payload.get("keyword", ""),
+                                payload.get("url", ""))
             self._json({"ok": ok, "error": None if ok else msg})
+            return
+
+        if self.path == "/api/resolve":
+            text = (payload.get("text") or "").strip()
+            if not resolve_note_link:
+                self._json({"ok": False, "error": "链接解析模块加载失败（xhs_fetch_selected.py 不在目录？）"})
+                return
+            try:
+                nid, _tok, canon, ntype = resolve_note_link(text)
+                self._json({"ok": True, "note_id": nid, "type": ntype,
+                            "url": canon})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
             return
 
         if self.path == "/job/stop":
@@ -758,6 +853,7 @@ def main():
     MAIN_NOTES = args.notes if os.path.isabs(args.notes) else os.path.join(BASE, args.notes)
 
     print(f"[√] 采集工作台已启动: http://127.0.0.1:{args.port}")
+    print("    四个入口: 博主主页 / 关键词搜索 / 单篇导入 / 已抓笔记（同页切换）")
     d = load_json(MAIN_NOTES)
     if d:
         print(f"    博主主页: {d.get('nickname')} | {d.get('count')} 条 | {MAIN_NOTES}")

@@ -6,6 +6,12 @@
     python xhs_fetch_selected.py                 # 抓 selection.json 里全部
     python xhs_fetch_selected.py --limit 3       # 只抓前 3 条（测试用）
     python xhs_fetch_selected.py --only <note_id>
+    python xhs_fetch_selected.py --url <链接>     # 单篇直抓（短链/分享文字均可）
+
+--url 单篇模式（2026-10-16 补回的最初能力）:
+    粘贴 xhslink.cn 短链、explore/discovery 完整链接、或整段分享文字都可以；
+    不进 selection.json，直接抓这一篇进 downloads/（序号续在已有文件夹后），
+    抓完照常出现在「已抓笔记」页、可导出 Obsidian。
 
 产出:
     downloads/<序号>_<标题>/
@@ -20,6 +26,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 import urllib.request
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +36,9 @@ OUTDIR = os.path.join(BASE, "downloads")
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+UA_IPHONE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+             "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+             "Version/16.0 Mobile/15E148 Safari/604.1")
 
 # 从笔记详情页内存里提取结构化字段（Vue ref 必须走 _rawValue）
 JS_EXTRACT = r"""
@@ -55,6 +65,7 @@ JS_EXTRACT = r"""
     out.ipLocation = n.ipLocation || '';
     const ui = n.user || {};
     out.nickname = ui.nickname || ui.nickName || '';
+    out.userId = ui.userId || ui.user_id || '';
     const ii = n.interactInfo || {};
     out.liked = ii.likedCount || '';
     out.collected = ii.collectedCount || '';
@@ -136,24 +147,117 @@ def load_done_index():
     return done
 
 
+def extract_link(text):
+    """从分享文本里抠出第一个小红书链接（用户经常整段share文案直接粘贴）"""
+    m = re.search(r"https?://(?:[\w.-]*xhslink\.(?:cn|com)"
+                  r"|(?:www\.)?xiaohongshu\.com)/\S+", text or "")
+    if not m:
+        return ""
+    return m.group(0).rstrip("）)\"'】】>>,，。；;！")
+
+
+def resolve_note_link(text):
+    """各种形态的输入 → (note_id, xsec_token, canonical_url, type_hint)
+
+    支持：xhslink.cn 短链、explore/discovery 完整链接、整段分享文字。
+    坑：短链匿名访问会先跳 /login?redirectPath=<真实目标>，
+    真实 URL 整体编码在 redirectPath 里，必须再解一层。
+    """
+    link = extract_link(text)
+    if not link:
+        raise ValueError("没找到小红书链接（支持 xhslink.cn 短链 / "
+                         "xiaohongshu.com 链接 / 带链接的分享文字）")
+    if "xhslink." in link:
+        req = urllib.request.Request(link, headers={"User-Agent": UA_IPHONE})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            link = r.geturl()
+    m = re.search(r"[?&]redirectPath=([^&\s]+)", link)
+    if m:
+        link = urllib.parse.unquote(m.group(1))
+    m = re.search(r"/(?:discovery/item|explore|item)/([0-9a-f]{24})", link)
+    if not m:
+        raise ValueError(f"链接里找不到笔记 ID：{link}")
+    nid = m.group(1)
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(link).query)
+    token = (qs.get("xsec_token") or [""])[0]
+    ntype = (qs.get("type") or [""])[0]
+    canon = f"https://www.xiaohongshu.com/explore/{nid}"
+    if token:
+        canon += ("?xsec_token=" + urllib.parse.quote(token, safe="")
+                  + "&xsec_source=app_share")
+    return nid, token, canon, ntype
+
+
+def find_note_folder(note_id):
+    """扫描 downloads/ 找该 note_id 已存在的 (序号, 目录名)；没有返回 (0, '')"""
+    if not os.path.isdir(OUTDIR):
+        return 0, ""
+    for dname in os.listdir(OUTDIR):
+        rp = os.path.join(OUTDIR, dname, "raw.json")
+        if not os.path.exists(rp):
+            continue
+        try:
+            with open(rp, encoding="utf-8") as f:
+                r = json.load(f)
+        except Exception:
+            continue
+        if r.get("note_id") == note_id:
+            m = re.match(r"^(\d+)_", dname)
+            return (int(m.group(1)) if m else 0), dname
+    return 0, ""
+
+
+def next_seq():
+    """downloads/ 里现有最大序号 + 1（单篇直抓续号用）"""
+    best = 0
+    if os.path.isdir(OUTDIR):
+        for dname in os.listdir(OUTDIR):
+            m = re.match(r"^(\d+)_", dname)
+            if m:
+                best = max(best, int(m.group(1)))
+    return best + 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="同 --count")
     ap.add_argument("--count", type=int, default=0, help="本次最多抓几篇；0=不限")
     ap.add_argument("--offset", type=int, default=0, help="跳过清单前 N 篇（断点续导）")
     ap.add_argument("--only", default="")
+    ap.add_argument("--url", default="",
+                    help="单篇直抓：笔记链接/短链/分享文字（不走 selection.json）")
     ap.add_argument("--no-resume", action="store_true", help="忽略断点，强制重抓已完成项")
     args = ap.parse_args()
 
-    if not os.path.exists(SEL):
-        log("[X] 找不到 selection.json —— 请先在采集工作台勾选笔记（勾选自动保存）")
-        return
-    with open(SEL, encoding="utf-8") as f:
-        sel = json.load(f)
-    notes_full = sel.get("notes") or []
-    if not notes_full:
-        log("[X] selection.json 里没有笔记")
-        return
+    single = bool((args.url or "").strip())
+    if single:
+        try:
+            nid, _token, canon, ntype = resolve_note_link(args.url)
+        except Exception as e:
+            log("[X]", e)
+            return
+        seq, old_folder = find_note_folder(nid)
+        if not seq:
+            seq = next_seq()
+        note = {"note_id": nid, "title": "", "type": ntype or "normal",
+                "date": "", "url": canon}
+        sel = {"nickname": "", "user_id": "", "notes": [note], "single": True}
+        notes_full = [note]
+        log("=" * 64)
+        log(f"[*] 单篇直抓: {canon}")
+        log(f"    note_id={nid} | 目录序号 {seq:02d}"
+            + (f"（已抓过，将覆盖 {old_folder}）" if old_folder else ""))
+        log("=" * 64)
+    else:
+        if not os.path.exists(SEL):
+            log("[X] 找不到 selection.json —— 请先在采集工作台勾选笔记（勾选自动保存）")
+            return
+        with open(SEL, encoding="utf-8") as f:
+            sel = json.load(f)
+        notes_full = sel.get("notes") or []
+        if not notes_full:
+            log("[X] selection.json 里没有笔记")
+            return
 
     count = args.count or args.limit  # --limit 为兼容旧写法
     done = load_done_index()
@@ -165,6 +269,9 @@ def main():
             continue
         if i <= args.offset:
             continue
+        if single:
+            todo.append((seq, note))   # 单篇：固定用续好的序号，且总是重抓
+            continue
         if not args.no_resume and i in done:
             continue
         todo.append((i, note))
@@ -172,14 +279,17 @@ def main():
         todo = todo[:count]
 
     os.makedirs(OUTDIR, exist_ok=True)
-    log("=" * 64)
-    log(f"[*] 博主: {sel.get('nickname')} | 清单 {len(notes_full)} 篇 | "
-        f"已完成(断点跳过) {len(done)} 篇 | 本次待抓 {len(todo)} 篇"
-        + (f" | offset={args.offset} count={count}" if (args.offset or count) else ""))
+    if not single:
+        log("=" * 64)
+        log(f"[*] 博主: {sel.get('nickname')} | 清单 {len(notes_full)} 篇 | "
+            f"已完成(断点跳过) {len(done)} 篇 | 本次待抓 {len(todo)} 篇"
+            + (f" | offset={args.offset} count={count}" if (args.offset or count) else ""))
+        log("=" * 64)
     if not todo:
         log("[√] 没有需要抓取的笔记（全部完成或切片为空）")
         return
-    log("=" * 64)
+    if not single:
+        log("=" * 64)
 
     from playwright.sync_api import sync_playwright
 
@@ -211,8 +321,13 @@ def main():
 
         page.on("response", _on_resp)
 
-        def collect_author_comments(note_id):
-            """从已捕获的接口响应里筛出博主的评论（含子评论、置顶）"""
+        def collect_author_comments(note_id, uid=None):
+            """从已捕获的接口响应里筛出博主的评论（含子评论、置顶）
+
+            uid 传单篇模式/详情页取到的作者 id；不传则退回清单博主的 user_id
+            （搜索结果可能跨博主，按篇取 id 才不会张冠李戴）。
+            """
+            want = str(uid or author_uid or "")
             out, seen = [], set()
             for hit_nid, cs in comment_hits:
                 if hit_nid != note_id:
@@ -221,10 +336,10 @@ def main():
                     group = [c] + (c.get("sub_comments") or [])
                     for cc in group:
                         cid = cc.get("id")
-                        uid = str((cc.get("user_info") or {}).get("user_id") or "")
+                        cuid = str((cc.get("user_info") or {}).get("user_id") or "")
                         if not cid or cid in seen:
                             continue
-                        if not author_uid or uid != author_uid:
+                        if not want or cuid != want:
                             continue
                         seen.add(cid)
                         out.append({
@@ -246,7 +361,11 @@ def main():
             nid = note.get("note_id")
             title = note.get("title") or ""
             url = note.get("url") or f"https://www.xiaohongshu.com/explore/{nid}"
-            log(f"\n[{i}/{len(notes_full)}] {title[:40]} ({note.get('type')})")
+            label = title[:40] or nid
+            if single:
+                log(f"\n[单篇 {i:02d}] {label} ({note.get('type')})")
+            else:
+                log(f"\n[{i}/{len(notes_full)}] {label} ({note.get('type')})")
 
             rec = {"note_id": nid, "list_title": title, "list_type": note.get("type"),
                    "list_date": note.get("date"), "url": url, "ok": False, "_seq": i,
@@ -293,6 +412,9 @@ def main():
                 continue
 
             ntitle = data.get("title") or title
+            if data.get("nickname"):
+                rec["author"] = data["nickname"]   # 按篇取真实作者，避免清单昵称张冠李戴
+            note_uid = str(data.get("userId") or "")
             folder = os.path.join(OUTDIR, f"{i:02d}_{sanitize(ntitle)}")
             os.makedirs(folder, exist_ok=True)
 
@@ -330,9 +452,16 @@ def main():
                 time.sleep(0.25)
             rec["images"] = img_files
 
-            # 视频：找官方字幕
-            html = page.content()
-            srt = re.findall(r"https://sns-subtitle[^\"\\ ]+\.srt\?[^\"\\ ]+", html)
+            # 视频：找官方字幕（图文跳过——少一次 page.content 少一分导航竞态；
+            # 实测 XHS 偶尔在抓取途中软跳转，page.content 会抛 context destroyed）
+            is_video = (data.get("type") == "video") or (note.get("type") == "video")
+            html = ""
+            if is_video:
+                try:
+                    html = page.content()
+                except Exception as e:
+                    log("     ! 读取页面失败（字幕检测跳过）:", e)
+            srt = re.findall(r"https://sns-subtitle[^\"\\ ]+\.srt\?[^\"\\ ]+", html) if html else []
             if srt:
                 u = srt[0].replace("\\u002F", "/")
                 p = os.path.join(folder, "subtitle.srt")
@@ -342,7 +471,7 @@ def main():
                     log("     · 已下载官方字幕")
                 except Exception as e:
                     log("     ! 字幕下载失败:", e)
-            elif (data.get("type") == "video"):
+            elif is_video:
                 # 无字幕 → 存关键帧（spectrum 图）
                 frames = data.get("images") or []
                 if frames:
@@ -363,7 +492,7 @@ def main():
             # 评论区：滚动加载 → 只留博主的发言
             n_hits = len(comment_hits)
             scroll_for_comments()
-            ac = collect_author_comments(nid)
+            ac = collect_author_comments(nid, note_uid)
             rec["author_comments"] = ac
             if ac:
                 log(f"     · 博主评论 {len(ac)} 条")
