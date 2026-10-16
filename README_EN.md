@@ -1,39 +1,21 @@
 <div align="center">
 
-# xhs-curator
+# 📕 xhs-curator — Xiaohongshu → Obsidian, on demand
 
 **<a href="README.md">简体中文</a> | English**
 
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![Python](https://img.shields.io/badge/python-%E2%89%A53.10-blue?style=flat-square&logo=python&logoColor=white)](#-quick-start)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=flat-square)](#-quick-start)
-[![GitHub stars](https://img.shields.io/github/stars/judy123violet-max/xhs-curator?style=flat-square&color=fda7df)](https://github.com/judy123violet-max/xhs-curator/stargazers)
-
-<p>🔥 <b>Browse first, pick what matters, export clean notes into Obsidian.</b></p>
-
-</div>
-
 ---
-
-> **⚠️ Disclaimer**
->
-> This project is for **personal learning and research** only. Do not use it for commercial purposes or large-scale scraping. You are responsible for complying with Xiaohongshu's Terms of Service and local laws, and for keeping request rates reasonable. See the full disclaimer at the bottom.
 
 ## 📖 Introduction
 
-A **visual pipeline** that collects Xiaohongshu (RedNote) notes into an Obsidian vault.
+**Pick-and-save Xiaohongshu notes into Obsidian — batch or single**: the note body, the **substance inside images**, and the creator's own comment supplements, captured in one pass. Two ways in —
 
-Two ways in: **whole profile** — it lays out a creator's profile or your search results for you to browse, and you pick the notes you actually want; **single note** — paste a share link and fetch it directly. Either way it fetches the note body, original images and **comments posted by the author**; text inside images is transcribed into searchable text — **content-heavy images become text (no duplicate), screenshots and photos are kept**; small-talk comments are filtered out so only substantive replies survive. Everything lands in your vault in Obsidian-native format.
+1. **Whole profile**: the creator's profile or your search results laid out as cards — click what you want to keep;
+2. **Single note**: paste a share link and fetch directly — no login required.
+
+Unlike "paste a link, get a note" or "bulk-download everything" tools, it goes deeper in three places: **per-image judgment** — content-heavy images become searchable text (no image/text duplication), screenshots and photos are kept as-is; **comments filtered twice** — only the creator's own replies survive, small talk is dropped; **headings restored** — visual headings like `01｜xxx` become real `###` headings in the Obsidian outline. Everything lands in your vault in Obsidian-native format, ready to read.
 
 **Who it's for**: people who treat Xiaohongshu as an information source and want to keep it in a knowledge base (job-hunting notes, industry experience, tutorials, competitor research).
-
-### 🔧 How it works
-
-- **Login only when needed**: **single-note fetching runs on an anonymous channel — no login at all** (the server-rendered page already carries the body text and original images). **Whole-profile collection, keyword search, and single-note imports that include author comments** need a login — Playwright drives your real Chrome; scan the QR code once and the session is persisted locally. No passwords involved.
-- **No signature reverse-engineering**: reads the official page state straight from the browser, avoiding encrypted-parameter reverse engineering.
-- **Dual-source listing** (profile / search): merges SSR first-screen data with scroll-loaded API data, so the newest screenful is never missed.
-- **Comments, filtered twice**: first by author (only the creator's own replies — that's where "see comments for details" content lives), then by value (substantive supplements stay, small talk is dropped).
-- **Resumable**: re-running skips notes already downloaded, making low-rate batch fetching easy.
 
 ## 🎁 What you get
 
@@ -83,7 +65,11 @@ tags:
 
 ![Curation workbench](docs/images/picker.jpg)
 
-The workbench is a local web page with four persistent tabs: **Creator profile / Keyword search / Single note / Fetched notes**. Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to preview the note in an embedded detail view** (press `Esc` or the "← 返回列表" button to come back — your selection is preserved). **Single note tab**: paste a share link (or a whole share text block) → resolve → fetch, with already-fetched notes detected automatically.
+The workbench is a local web page with four persistent tabs: **Creator profile / Keyword search / Single note / Fetched notes**.
+
+Browse notes as cards with select-all / invert / video-only / image-only / keyword filter; fetched notes are automatically badged 「已抓过」. **Click a card to select it**, **click the title or "原文↗" to preview the note in an embedded detail view** (press `Esc` or the "← 返回列表" button to come back — your selection is preserved).
+
+**Single note tab**: paste a share link (or a whole share text block) and hand it to the AI — it resolves and fetches in one step, with already-fetched notes detected automatically.
 
 ## ✨ Features
 
@@ -104,7 +90,7 @@ The workbench is a local web page with four persistent tabs: **Creator profile /
 
 - ✅ Three-tier OCR classification (transcribe key text / keep screenshot essentials / photos only)
 - ✅ **Per-image smart handling**: content-heavy images become searchable text (image dropped to avoid duplication), screenshots and photos kept as-is
-- ✅ Body headings restored as real `###` headings: lines like `01｜xxx` or `第一层是主干` become outline-navigable
+- ✅ Body headings restored as real `###` headings: lines like `01｜xxx` or `第一层是主干` become outline-navigable, so long notes read much smoother
 - ✅ Author comments auto-filtered: substantive supplements stay, small talk never enters the vault
 - ✅ Body cleanup: hashtags → frontmatter tags, mentions removed
 - ✅ Emoji stripped from titles, safe filenames
@@ -121,15 +107,13 @@ The workbench is a local web page with four persistent tabs: **Creator profile /
 | xiaohongshu-importer (140) | Obsidian plugin | Single share link (batch) | ❌ link in, note out | ❌ images only | ❌ none | Obsidian |
 | feedgrab | CLI | Single URL (multi-platform) | ❌ | ❌ | ❌ | generic Markdown |
 
-**Put simply**: other tools are about "saving"; this one is about "saving selectively, saving cleanly" — pick what's worth keeping from a whole creator profile, then import it with image text and comment replies included, all cleaned up.
-
 ### Three things most similar tools don't do
 
-After reading the source and docs of the projects above, these three gaps stand out:
+After reading the source and docs of these fellow quality projects, three gaps stand out:
 
 1. **Text inside images — read it, then decide per image**. Peers generally "download the image, never read it" (MediaCrawler, XHS-Downloader and the Obsidian plugins ship no OCR at all). We read every image, then judge **one by one**: content-heavy images become searchable text and the image itself is dropped (no duplication), while screenshots, selfies and scenery shots are kept (the picture *is* the information). The only peer on the same track, xhs-claude-skills, stops at a two-way text/decoration split.
 2. **Comments, filtered twice**. Peers either skip comments or grab them all (MediaCrawler pulls the full comment stream). We first filter by author (only the creator's own replies — that's where "see comments for details" content lives), then by value: substantive supplements stay, one-liners like "haha" or "miss you" are dropped.
-3. **Browse before picking**. Peers are "paste a link, get a note" or "bulk-download the list". We lay the creator's profile out as cards first — you pick what's worth keeping.
+3. **Browse before picking**. Peers are "paste a link, get a note" or "bulk-download the list". We lay the creator's profile out as cards first — you pick what's worth keeping, and can even open the original note right inside the workbench.
 
 ## 🔗 Supported inputs
 
@@ -228,6 +212,14 @@ downloads/01_note-title/
 ├── 01_note-title.md
 └── _附件/01_note-title/img_*.jpg    # referenced with ![[wikilink]]
 ```
+
+### 🔧 How it works
+
+- **Login only when needed**: **single-note fetching runs on an anonymous channel — no login at all** (the server-rendered page already carries the body text and original images). **Whole-profile collection, keyword search, and single-note imports that include author comments** need a login — Playwright drives your real Chrome; scan the QR code once and the session is persisted locally. No passwords involved.
+- **No signature reverse-engineering**: reads the official page state straight from the browser, avoiding encrypted-parameter reverse engineering.
+- **Dual-source listing** (profile / search): merges SSR first-screen data with scroll-loaded API data, so the newest screenful is never missed.
+- **Comments, filtered twice**: first by author (only the creator's own replies — that's where "see comments for details" content lives), then by value (substantive supplements stay, small talk is dropped).
+- **Resumable**: re-running skips notes already downloaded, making low-rate batch fetching easy.
 
 ## 💻 Where it runs
 
