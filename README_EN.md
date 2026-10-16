@@ -23,16 +23,16 @@
 
 A **visual pipeline** that collects Xiaohongshu (RedNote) notes into an Obsidian vault.
 
-Two ways in: **whole profile** — it lays out a creator's profile or your search results for you to browse, and you pick the notes you actually want; **single note** — paste a share link and fetch it directly. Either way it fetches the note body, original images and **comments posted by the author**, transcribes text inside images into searchable text, and finally writes everything into your vault in Obsidian-native format.
+Two ways in: **whole profile** — it lays out a creator's profile or your search results for you to browse, and you pick the notes you actually want; **single note** — paste a share link and fetch it directly. Either way it fetches the note body, original images and **comments posted by the author**; text inside images is transcribed into searchable text — **content-heavy images become text (no duplicate), screenshots and photos are kept**; small-talk comments are filtered out so only substantive replies survive. Everything lands in your vault in Obsidian-native format.
 
 **Who it's for**: people who treat Xiaohongshu as an information source and want to keep it in a knowledge base (job-hunting notes, industry experience, tutorials, competitor research).
 
 ### 🔧 How it works
 
-- **Reuses your local login**: Playwright drives your real Chrome; scan the QR code once and the session is persisted locally. No passwords involved.
+- **Login only when needed**: **single-note fetching runs on an anonymous channel — no login at all** (the server-rendered page already carries the body text and original images). **Whole-profile collection, keyword search, and single-note imports that include author comments** need a login — Playwright drives your real Chrome; scan the QR code once and the session is persisted locally. No passwords involved.
 - **No signature reverse-engineering**: reads the official page state straight from the browser, avoiding encrypted-parameter reverse engineering.
-- **Dual-source listing**: merges SSR first-screen data with scroll-loaded API data, so the newest screenful is never missed.
-- **Author-only comments**: listens to the official comment API and keeps only comments written by the creator.
+- **Dual-source listing** (profile / search): merges SSR first-screen data with scroll-loaded API data, so the newest screenful is never missed.
+- **Comments, filtered twice**: first by author (only the creator's own replies — that's where "see comments for details" content lives), then by value (substantive supplements stay, small talk is dropped).
 - **Resumable**: re-running skips notes already downloaded, making low-rate batch fetching easy.
 
 ## 🎁 What you get
@@ -59,18 +59,22 @@ tags:
 
 …full body text, with #hashtag[话题]# markers and @mentions stripped out…
 
+### 01｜One of the section headings found in the body   ← visual headings restored as real headings
+（lines that look like headings in the app become `###` headings — they show up in the Obsidian outline）
+
 ## 图片与文字转录
 
 ![[_附件/01_…/img_01.jpg]]
 
 ![[_附件/01_…/img_02.jpg]]
-（key text inside the image, transcribed verbatim, headings and lists kept）
-（selfies, scenery and mood shots keep only the image — no caption at all）
+（content-heavy image: text transcribed verbatim — **the image itself is not embedded**, so text and picture never repeat）
+（screenshots, selfies, scenery and mood shots: the image is kept as-is）
 
-## 博主的评论                     ← always last in the note
+## 博主的评论                     ← always last in the note, small talk filtered out
 
 > 03｜… (the body said "running out of space, see comments" —
-> the full version from the author's comment is captured too)
+> the full version from the author's comment is captured too;
+> one-liners like "haha" or "miss you" are dropped automatically)
 ```
 
 **What you end up with**: the body text, the text inside the images, and the author's comment replies — all three. No emoji in titles, no hashtag noise in the body; ready to read.
@@ -92,28 +96,40 @@ The workbench is a local web page with four persistent tabs: **Creator profile /
 - ✅ Fetched notes are badged automatically, reconciled with local download records
 - ✅ In-window note preview; selection auto-saved
 - ✅ One-click fetch from the page: the script runs in the background with live logs, badges refresh when done
-- ✅ Fetch body text, original images, official subtitles for videos
+- ✅ Fetch body text, original images; videos prefer platform subtitles (only generated for some videos), falling back to key frames
 - ✅ Author-only comments (including replies and pinned ones)
 - ✅ Resumable fetching (offset / count)
 
 **Processing & export**
 
 - ✅ Three-tier OCR classification (transcribe key text / keep screenshot essentials / photos only)
+- ✅ **Per-image smart handling**: content-heavy images become searchable text (image dropped to avoid duplication), screenshots and photos kept as-is
+- ✅ Body headings restored as real `###` headings: lines like `01｜xxx` or `第一层是主干` become outline-navigable
+- ✅ Author comments auto-filtered: substantive supplements stay, small talk never enters the vault
 - ✅ Body cleanup: hashtags → frontmatter tags, mentions removed
 - ✅ Emoji stripped from titles, safe filenames
 - ✅ Obsidian-native export: frontmatter + `![[wikilink]]` attachment folders
 
 ## 🆚 How it differs
 
-| Project | Form | Input | Browse before picking | Text in images | Author comments | Output |
+| Project (stars) | Form | Input | Browse before picking | Text in images | Comment handling | Output |
 |---|---|---|---|---|---|---|
-| **xhs-curator** | Visual workbench + scripts | Creator profile / keyword | ✅ pick by clicking | ✅ tiered OCR | ✅ author only | Obsidian vault |
-| xhs-importer-pro | Obsidian plugin | Single share link (batch) | ❌ link in, note out | ❌ | ❌ | Obsidian |
-| feedgrab | CLI | Single URL (multi-platform) | ❌ | video via ASR | ❌ | generic Markdown |
-| XHS-Downloader | CLI / userscript | Note links, account lists | ❌ bulk download | ❌ | ❌ | local files |
-| MediaCrawler | CLI crawler | Keyword / creator page | ❌ | ❌ | all comments | JSON / database |
+| **xhs-curator** | Visual workbench + scripts | Creator profile / keyword / single note | ✅ pick by clicking | ✅ **per-image decision**: content-heavy → text, decorations kept | ✅ **author-only + small-talk filter** | Obsidian vault |
+| MediaCrawler (30k) | CLI crawler | Keyword / creator page | ❌ | ❌ images only | ⚠️ all comments, unfiltered | JSON / database |
+| XHS-Downloader (11.7k) | CLI / userscript | Note links, account lists | ❌ bulk download | ❌ images only | ❌ none | local files |
+| xhs-claude-skills (423) | Claude Code plugin | Single share link | ❌ | ✅ multimodal OCR (two-way split) | ❌ none | condensed Obsidian notes |
+| xiaohongshu-importer (140) | Obsidian plugin | Single share link (batch) | ❌ link in, note out | ❌ images only | ❌ none | Obsidian |
+| feedgrab | CLI | Single URL (multi-platform) | ❌ | ❌ | ❌ | generic Markdown |
 
 **Put simply**: other tools are about "saving"; this one is about "saving selectively, saving cleanly" — pick what's worth keeping from a whole creator profile, then import it with image text and comment replies included, all cleaned up.
+
+### Three things most similar tools don't do
+
+After reading the source and docs of the projects above, these three gaps stand out:
+
+1. **Text inside images — read it, then decide per image**. Peers generally "download the image, never read it" (MediaCrawler, XHS-Downloader and the Obsidian plugins ship no OCR at all). We read every image, then judge **one by one**: content-heavy images become searchable text and the image itself is dropped (no duplication), while screenshots, selfies and scenery shots are kept (the picture *is* the information). The only peer on the same track, xhs-claude-skills, stops at a two-way text/decoration split.
+2. **Comments, filtered twice**. Peers either skip comments or grab them all (MediaCrawler pulls the full comment stream). We first filter by author (only the creator's own replies — that's where "see comments for details" content lives), then by value: substantive supplements stay, one-liners like "haha" or "miss you" are dropped.
+3. **Browse before picking**. Peers are "paste a link, get a note" or "bulk-download the list". We lay the creator's profile out as cards first — you pick what's worth keeping.
 
 ## 🔗 Supported inputs
 
@@ -123,9 +139,17 @@ The workbench is a local web page with four persistent tabs: **Creator profile /
 | Keyword | `xhs_search_fetch.py` | `search_notes.json` |
 | Single note URL or share text | `xhs_fetch_selected.py --url "<link>"` or the "Single note" tab | `downloads/` (same pipeline as bulk import) |
 
-Both list files feed directly into the picker (`--notes`).
+All three inputs are built into the picker (`--notes` still accepts a custom list file).
 
 ## 🚀 Quick start
+
+### ⚡ One-liner install (if you'd rather not touch a terminal)
+
+Paste this into your AI agent (Claude Code / WorkBuddy / Cursor — any of them) and let it do the work:
+
+> Clone https://github.com/judy123violet-max/xhs-curator locally, install the Python dependencies and Playwright, then start the picker server and give me the URL.
+
+All that's left for you: wait for the install to finish, scan the QR code once.
 
 ### Requirements
 
@@ -133,7 +157,7 @@ Both list files feed directly into the picker (`--notes`).
 |---|---|
 | Python | 3.10+ |
 | Browser | Chrome installed locally |
-| Account | A Xiaohongshu account (scan the QR code **once** on first run; the session is stored in `browser_profile/`) |
+| Account | **Optional**. Single-note fetching (anonymous channel) needs none; whole-profile collection / keyword search / single-note imports with author comments need a Xiaohongshu account — scan the QR code **once** on first run; the session is stored in `browser_profile/` |
 
 ### 1. Install
 
@@ -182,7 +206,7 @@ python xhs_fetch_selected.py --offset 5   # continue from where you left off
 
 Images land in `downloads/<note>/img_*.jpg`. **Text inside images needs a multimodal AI** — this project only defines the format. Send this to any vision-capable model:
 
-> Read the images under `downloads`, transcribe the text in each image, and write the result to `ocr.md` in the same folder, one section per image (`## img_01.jpg` followed by the transcription). For selfies and scenery write `（照片）`; for UI screenshots keep only the meaningful content and prompts.
+> Read the images under `downloads`, transcribe the text in each image, and write the result to `ocr.md` in the same folder, one section per image (`## img_01.jpg` followed by the transcription). **For content-heavy images transcribe the full text** (at export time these images are converted to text and no longer embedded); for selfies and scenery write `（照片）`; for UI screenshots keep only the meaningful content and prompts.
 
 ### 6. Export to Obsidian
 
@@ -218,7 +242,7 @@ downloads/01_note-title/
 <details>
 <summary><b>Do I have to log in? What about my password?</b></summary>
 
-Log in once by scanning a QR code; the session is reused locally afterwards. The tool never touches your password. `browser_profile/` is gitignored — never commit it.
+It depends: **single-note fetching (anonymous channel) needs no login at all**. Whole-profile collection, keyword search, and single-note imports that include author comments need a login — scan the QR code once and the session is reused locally. The tool never touches your password. `browser_profile/` is gitignored — never commit it.
 </details>
 
 <details>
@@ -236,7 +260,19 @@ Just run it again — completed notes are skipped automatically.
 <details>
 <summary><b>Does it fetch other people's comments?</b></summary>
 
-Only comments posted by the creator, which often carry extra substance. Other users' comments are ignored.
+Only comments posted by the creator, which often carry extra substance — and even those are filtered: substantive supplements stay, small talk like "haha" or "miss you" is dropped. Other users' comments are ignored entirely.
+</details>
+
+<details>
+<summary><b>What about video notes?</b></summary>
+
+Platform subtitles (`subtitle.srt`) are used when available — but **the platform only generates them for some videos** (about two thirds in our small sample). Without subtitles the tool extracts key frames for the OCR step; it can only read text visible on screen, not the spoken content, and such notes get a visible warning.
+</details>
+
+<details>
+<summary><b>Why did the emoji in the title disappear?</b></summary>
+
+Stripped by default (cleaner imports into Obsidian); it can be turned off in the source.
 </details>
 
 <details>
