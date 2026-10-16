@@ -115,6 +115,55 @@ def sanitize(name, maxlen=48):
     return (name or "untitled")[:maxlen]
 
 
+# ---- 本地语音转写（2026-10-16：无官方字幕的视频，用 faster-whisper 兜底）----
+# 竞品同款简单方案：纯 pip 安装（PyAV 随包解码，不需要系统 ffmpeg）、无 API key。
+# 模型放 <脚本目录>/models/faster-whisper-<name>/，首次自动从 hf-mirror 逐文件下载
+# （不走 huggingface_hub 下载器——本环境实测它对镜像会拿到 0 字节文件）。
+HF_MIRROR = "https://hf-mirror.com"
+_WHISPER_FILES = ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"]
+_WHISPER = {"model": None, "name": ""}
+
+
+def _model_dir(name):
+    if not re.fullmatch(r"[a-z0-9._-]+", name or ""):
+        raise ValueError(f"模型名不合法: {name!r}")
+    d = os.path.join(BASE, "models", f"faster-whisper-{name}")
+    binp = os.path.join(d, "model.bin")
+    if os.path.exists(binp) and os.path.getsize(binp) > 1_000_000:
+        return d
+    os.makedirs(d, exist_ok=True)
+    base_url = f"{HF_MIRROR}/Systran/faster-whisper-{name}/resolve/main"
+    for fn in _WHISPER_FILES:
+        p = os.path.join(d, fn)
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            continue
+        log(f"     · 下载模型文件 {fn} …")
+        tmp = p + ".part"
+        req = urllib.request.Request(f"{base_url}/{fn}", headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=600) as r, open(tmp, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+        os.replace(tmp, p)
+    if os.path.getsize(binp) <= 1_000_000:
+        raise RuntimeError("模型下载不完整，请检查网络后重试")
+    return d
+
+
+def transcribe_audio(path, model_name="small"):
+    if _WHISPER["model"] is None or _WHISPER["name"] != model_name:
+        from faster_whisper import WhisperModel
+        d = _model_dir(model_name)
+        log(f"     · 加载本地 Whisper 模型 {model_name}")
+        _WHISPER["model"] = WhisperModel(d, device="cpu", compute_type="int8")
+        _WHISPER["name"] = model_name
+    segs, _info = _WHISPER["model"].transcribe(path, language="zh", vad_filter=True)
+    # 每个语义段一行，转写文本更易读
+    return "\n".join(s.text.strip() for s in segs if s.text.strip())
+
+
 def download(url, path, referer="https://www.xiaohongshu.com/"):
     req = urllib.request.Request(url, headers={
         "User-Agent": UA,
@@ -227,6 +276,10 @@ def main():
     ap.add_argument("--url", default="",
                     help="单篇直抓：笔记链接/短链/分享文字（不走 selection.json）")
     ap.add_argument("--no-resume", action="store_true", help="忽略断点，强制重抓已完成项")
+    ap.add_argument("--whisper-model", default="small",
+                    help="无官方字幕视频的本地转写模型（tiny/base/small/medium，默认 small）")
+    ap.add_argument("--no-asr", action="store_true",
+                    help="跳过本地语音转写（只抓字幕/关键帧；首次用需 pip install faster-whisper）")
     args = ap.parse_args()
 
     single = bool((args.url or "").strip())
@@ -388,6 +441,16 @@ def main():
                     d = json.loads(raw)
                     if d.get("ok"):
                         data = d
+                        # 视频的 media.stream（视频直链）是 SPA 异步填充的，
+                        # 首屏 700ms 时常还没到 → 视频笔记多轮询几轮
+                        if d.get("type") == "video" and not d.get("videoUrl"):
+                            for _w in range(12):
+                                page.wait_for_timeout(500)
+                                raw = page.evaluate(JS_EXTRACT)
+                                d2 = json.loads(raw)
+                                if d2.get("ok") and (d2.get("videoUrl") or d2.get("rawSubtitle")):
+                                    data = d2
+                                    break
                         break
                 except Exception:
                     pass
@@ -472,7 +535,29 @@ def main():
                 except Exception as e:
                     log("     ! 字幕下载失败:", e)
             elif is_video:
-                # 无字幕 → 存关键帧（spectrum 图）
+                # 无字幕 → 下载视频做本地语音转写（faster-whisper，可 --no-asr 跳过）
+                vurl = (data.get("videoUrl") or "").strip()
+                transcript = ""
+                if vurl and not args.no_asr:
+                    vp = os.path.join(folder, "video.mp4")
+                    try:
+                        log("     · 无官方字幕，下载视频做本地语音转写…")
+                        download(vurl, vp, referer=url)
+                        transcript = transcribe_audio(vp, args.whisper_model)
+                    except Exception as e:
+                        log("     ! 语音转写失败（不影响其余内容）:", e)
+                    finally:
+                        if os.path.exists(vp):
+                            os.remove(vp)   # 转写完即删，不占空间
+                if transcript:
+                    p = os.path.join(folder, "transcript.txt")
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(transcript)
+                    rec["transcript_file"] = "transcript.txt"
+                    log(f"     ✓ 语音转写完成，{len(transcript)} 字")
+                elif is_video and args.no_asr:
+                    log("     · --no-asr 跳过语音转写")
+                # 关键帧照旧（画面文字也有信息量）
                 frames = data.get("images") or []
                 if frames:
                     fdir = os.path.join(folder, "frames")

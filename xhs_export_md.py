@@ -508,6 +508,16 @@ def main():
             L.append(f"![[_附件/{att_name}/{sub_rel}]]")
             L.append("")
 
+        tp = os.path.join(SRC, d, "transcript.txt")
+        if os.path.exists(tp):
+            L.append("## 语音转写")
+            L.append("")
+            L.append("> 本视频无官方字幕，以下为本地 Whisper 语音转写，可能有少量识别误差。")
+            L.append("")
+            with open(tp, encoding="utf-8") as f:
+                L.append(f.read().strip())
+            L.append("")
+
         if frames:
             L.append("## 视频关键帧")
             L.append("")

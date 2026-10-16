@@ -1,1 +1,4 @@
 playwright>=1.40.0
+
+# 可选：无官方字幕视频的本地语音转写（--no-asr 可跳过）
+faster-whisper>=1.0.0
