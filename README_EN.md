@@ -4,6 +4,8 @@
 
 **<a href="README.md">简体中文</a> | English**
 
+</div>
+
 ---
 
 ## 📖 Introduction

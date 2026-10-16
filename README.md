@@ -4,6 +4,8 @@
 
 **简体中文 | <a href="README_EN.md">English</a>**
 
+</div>
+
 ---
 
 ## 📖 项目简介
