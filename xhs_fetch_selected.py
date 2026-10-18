@@ -25,9 +25,18 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 import urllib.parse
 import urllib.request
+
+# Windows 控制台可能是 GBK：日志里的 ⚠ 等字符不能把抓取流程打断
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 SEL = os.path.join(BASE, "selection.json")
@@ -178,21 +187,21 @@ def download(url, path, referer="https://www.xiaohongshu.com/"):
 
 
 def load_done_index():
-    """扫描 downloads/，返回 {序号: 目录名}（仅 raw.json ok=true 的算完成）"""
+    """扫描 downloads/，返回 {note_id: 目录名}（仅 raw.json ok=true 的算完成）"""
     done = {}
     if not os.path.isdir(OUTDIR):
         return done
     for dname in os.listdir(OUTDIR):
-        m = re.match(r"^(\d+)_", dname)
         rp = os.path.join(OUTDIR, dname, "raw.json")
-        if not m or not os.path.exists(rp):
+        if not os.path.exists(rp):
             continue
         try:
             with open(rp, encoding="utf-8") as f:
-                if json.load(f).get("ok"):
-                    done[int(m.group(1))] = dname
+                rec = json.load(f)
         except Exception:
-            pass
+            continue
+        if rec.get("ok") and rec.get("note_id"):
+            done[rec["note_id"]] = dname
     return done
 
 
@@ -256,15 +265,56 @@ def find_note_folder(note_id):
     return 0, ""
 
 
-def next_seq():
-    """downloads/ 里现有最大序号 + 1（单篇直抓续号用）"""
-    best = 0
+def used_seqs():
+    """返回 {序号: note_id}；目录没有 raw.json 时 note_id 为空串。"""
+    used = {}
     if os.path.isdir(OUTDIR):
         for dname in os.listdir(OUTDIR):
             m = re.match(r"^(\d+)_", dname)
-            if m:
-                best = max(best, int(m.group(1)))
-    return best + 1
+            if not m:
+                continue
+            seq = int(m.group(1))
+            nid = ""
+            rp = os.path.join(OUTDIR, dname, "raw.json")
+            if os.path.exists(rp):
+                try:
+                    with open(rp, encoding="utf-8") as f:
+                        nid = json.load(f).get("note_id") or ""
+                except Exception:
+                    pass
+            used.setdefault(seq, nid)
+    return used
+
+
+def allocate_seq(preferred, note_id, used):
+    """复用该 note_id 已有序号；否则用空闲的清单位置；再否则取最大序号 + 1。"""
+    seq, _ = find_note_folder(note_id)
+    if seq and used.get(seq) in ("", note_id):
+        return seq
+    if preferred and (preferred not in used or used[preferred] in ("", note_id)):
+        used[preferred] = note_id
+        return preferred
+    seq = max(used, default=0) + 1
+    used[seq] = note_id
+    return seq
+
+
+def plan_batch(notes_full, done, offset=0, count=0, only="", no_resume=False):
+    """筛选待抓笔记并分配稳定、不冲突的目录序号。"""
+    candidates = []
+    for i, note in enumerate(notes_full, 1):
+        if only and note.get("note_id") != only:
+            continue
+        if i <= offset:
+            continue
+        if not no_resume and note.get("note_id") in done:
+            continue
+        candidates.append((i, note))
+    if count and count > 0:
+        candidates = candidates[:count]
+    used = used_seqs()
+    return [(allocate_seq(i, note.get("note_id"), used), note)
+            for i, note in candidates]
 
 
 def main():
@@ -291,7 +341,7 @@ def main():
             return
         seq, old_folder = find_note_folder(nid)
         if not seq:
-            seq = next_seq()
+            seq = allocate_seq(0, nid, used_seqs())
         note = {"note_id": nid, "title": "", "type": ntype or "normal",
                 "date": "", "url": canon}
         sel = {"nickname": "", "user_id": "", "notes": [note], "single": True}
@@ -315,27 +365,20 @@ def main():
     count = args.count or args.limit  # --limit 为兼容旧写法
     done = load_done_index()
 
-    # 切片（offset/count）+ 断点跳过；序号始终取全量清单位置，保证目录编号稳定
-    todo = []
-    for i, note in enumerate(notes_full, 1):
-        if args.only and note.get("note_id") != args.only:
-            continue
-        if i <= args.offset:
-            continue
-        if single:
-            todo.append((seq, note))   # 单篇：固定用续好的序号，且总是重抓
-            continue
-        if not args.no_resume and i in done:
-            continue
-        todo.append((i, note))
-    if count and count > 0:
-        todo = todo[:count]
+    # 切片（offset/count）+ 断点跳过；序号优先复用已有目录，避免单篇/批量撞号
+    if single:
+        todo = [(seq, notes_full[0])]   # 单篇：固定用续好的序号，且总是重抓
+    else:
+        todo = plan_batch(notes_full, done, args.offset, count,
+                          args.only, args.no_resume)
 
     os.makedirs(OUTDIR, exist_ok=True)
     if not single:
+        done_in_list = sum(1 for n in notes_full
+                           if n.get("note_id") in done)
         log("=" * 64)
         log(f"[*] 博主: {sel.get('nickname')} | 清单 {len(notes_full)} 篇 | "
-            f"已完成(断点跳过) {len(done)} 篇 | 本次待抓 {len(todo)} 篇"
+            f"已完成(断点跳过) {done_in_list} 篇 | 本次待抓 {len(todo)} 篇"
             + (f" | offset={args.offset} count={count}" if (args.offset or count) else ""))
         log("=" * 64)
     if not todo:
