@@ -19,6 +19,13 @@ Unlike "paste a link, get a note" or "bulk-download everything" tools, it goes d
 
 **Who it's for**: people who treat Xiaohongshu as an information source and want to keep it in a knowledge base (job-hunting notes, industry experience, tutorials, competitor research).
 
+## 🧩 AnyLink to Note · single-link Skill
+
+The `skill/` directory is the AnyLink to Note Skill package: anonymous, login-free, one share link in and the note body, original images and official subtitles out. Videos without subtitles can be transcribed locally with Whisper. For creator comments or whole-profile batches, use the logged-in workbench in this repo.
+
+- Install and usage: [skill/README.md](skill/README.md)
+- Routing rules and boundaries: [skill/SKILL.md](skill/SKILL.md)
+
 ## 🎁 What you get
 
 A real export sample (content omitted):
@@ -48,9 +55,9 @@ tags:
 
 ## 图片与文字转录
 
-![[_附件/01_…/img_01.jpg]]
+![[note-title--img_01.jpg]]
 
-![[_附件/01_…/img_02.jpg]]
+![[note-title--img_02.jpg]]
 （content-heavy image: text transcribed verbatim — **the image itself is not embedded**, so text and picture never repeat）
 （screenshots, selfies, scenery and mood shots: the image is kept as-is）
 
@@ -212,7 +219,7 @@ downloads/01_note-title/
 
 <vault>/
 ├── 01_note-title.md
-└── _附件/01_note-title/img_*.jpg    # referenced with ![[wikilink]]
+└── attachments/note-title--img_*.jpg    # referenced with ![[note-title--img_*.jpg]]
 ```
 
 ### 🔧 How it works
@@ -287,6 +294,14 @@ The detail view is embedded, and browser cross-site rules mean it carries no log
 - [x] Direct import from a single note URL (`--url` / the "Single note" tab; supports short links and whole share text blocks)
 - [ ] Config file for paths, ports and fetch rate
 - [ ] One-click installer
+
+## 🧪 Local tests
+
+Offline regression tests for resume and sequence allocation (no Xiaohongshu requests):
+
+```bash
+python -m unittest discover -s tests
+```
 
 ## ⭐ Star history
 
