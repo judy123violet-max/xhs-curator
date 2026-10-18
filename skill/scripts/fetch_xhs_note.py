@@ -230,6 +230,15 @@ def unescape_url(u):
     return re.sub(r'^http://', 'https://', u)
 
 
+def unescape_text(s):
+    """JSON 字符串反转义（页面里的正文常带 \\n / \\t / \\uXXXX）。"""
+    try:
+        return json.loads('"' + s + '"')
+    except Exception:
+        return (s.replace("\\n", "\n").replace("\\t", "\t")
+                 .replace('\\"', '"').replace("\\/", "/"))
+
+
 def find_note_region(html):
     """定位笔记数据块：优先新结构 note.data.noteData，兜底老结构 noteDetailMap"""
     i = html.find('"data":{"noteData":{')
@@ -268,17 +277,26 @@ def extract_note(html):
         die("页面里找不到笔记数据块（noteData / noteDetailMap 都没有）")
 
     note_id = rx(r'"noteId":"((?:[^"\\]|\\.)*)"', region)
-    title = rx(r'"title":"((?:[^"\\]|\\.)*)"', region)
+    title = unescape_text(rx(r'"title":"((?:[^"\\]|\\.)*)"', region))
     desc = ""
     for m in re.finditer(r'"desc":"((?:[^"\\]|\\.)*)"', region):
         tail = region[m.end():m.end() + 12]
         if tail.startswith(',"leftIcon"'):
             continue
-        desc = m.group(1)
+        desc = unescape_text(m.group(1))
         break
-    author = rx(r'"nickname":"((?:[^"\\]|\\.)*)"', region)
-    user_id = rx(r'"userId":"((?:[^"\\]|\\.)*)"', region)
-    ip = rx(r'"ipLocation":"((?:[^"\\]|\\.)*)"', region)
+    # 笔记作者在 user 对象里是 nickName（大写 N）；评论区才是 nickname。
+    um = re.search(
+        r'"user":\{[^{}]*?"userId":"([^"]*)"[^{}]*?"nickName":"((?:[^"\\]|\\.)*)"',
+        region)
+    if um:
+        user_id, author = um.group(1), unescape_text(um.group(2))
+    else:
+        author = unescape_text(
+            rx(r'"nickName":"((?:[^"\\]|\\.)*)"', region)
+            or rx(r'"nickname":"((?:[^"\\]|\\.)*)"', region))
+        user_id = rx(r'"userId":"((?:[^"\\]|\\.)*)"', region)
+    ip = unescape_text(rx(r'"ipLocation":"((?:[^"\\]|\\.)*)"', region))
     # type 只可能是 video/normal；region 里话题标签的 "type":"topic" 会干扰
     # 简单正则，故按字面值优先判定（2026-10-16 实测踩坑）
     if '"type":"video"' in region:
@@ -301,6 +319,7 @@ def extract_note(html):
     tags = []
     for t in (re.findall(r'"name":"((?:[^"\\]|\\.)*)","type":"topic"', region)
               + re.findall(r'"type":"topic","id":"[^"]*","name":"((?:[^"\\]|\\.)*)"', region)):
+        t = unescape_text(t)
         if t not in tags:
             tags.append(t)
 
@@ -322,10 +341,12 @@ def extract_note(html):
                 urls.append(cu)
 
     # 官方字幕 / 视频流（视频笔记才有；页面被降级时为空 —— 节流后重试）
+    # 页面里的 URL 可能是 http:\u002F\u002Fsns-video...，先还原转义再匹配
+    flat = html.replace("\\u002F", "/").replace("\\u002f", "/")
     subs = sorted(set(unescape_url(u) for u in
-                      re.findall(r'https://sns-subtitle[^"\\ ]+', html)))
+                      re.findall(r'https://sns-subtitle[^"\\ ]+', flat)))
     vids = sorted(set(unescape_url(u) for u in
-                      re.findall(r'https?://sns-video[^"\\ ]+', html)))
+                      re.findall(r'https?://sns-video[^"\\ ]+', flat)))
 
     return {
         "note_id": note_id, "title": title, "desc": desc, "type": ntype,
@@ -338,12 +359,38 @@ def extract_note(html):
     }
 
 
+def _cjk_ratio(text):
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if "\u4e00" <= c <= "\u9fff") / len(letters)
+
+
 def pick_cn_subtitle(subs):
-    """选中文源字幕：_1.srt 优先（zh 源），其次任意"""
-    for u in subs:
+    """优先选中文轨（中文轨里取信息最全的一条）；没有中文时回退 _1 源字幕。
+    返回 (url, data)；data 为空表示未能预取。"""
+    picked = []
+    for u in subs[:4]:
+        try:
+            data = curl_get(u, headers={"Referer": REFERER}, timeout=30,
+                            binary=True)
+        except Exception:
+            continue
+        text = data.decode("utf-8", "ignore")
+        if text.strip():
+            picked.append((u, data, text))
+        time.sleep(0.2)
+    zh = [p for p in picked if _cjk_ratio(p[2]) >= 0.2]
+    if zh:
+        u, data, _ = max(zh, key=lambda p: len(p[2]))
+        return u, data
+    for u, data, _ in picked:
         if re.search(r'_1\.srt\?', u):
-            return u
-    return subs[0] if subs else ""
+            return u, data
+    if picked:
+        return picked[0][0], picked[0][1]
+    fallback = next((u for u in subs if re.search(r'_1\.srt\?', u)), "")
+    return fallback or (subs[0] if subs else ""), b""
 
 
 def download_images(urls, outdir):
@@ -406,12 +453,12 @@ def main():
           f"  图: {len(meta['image_urls'])}"
           f"  字幕: {len(meta['subtitle_urls'])}")
 
-    # 视频：下载官方字幕（_1 中文源优先）
+    # 视频：下载官方字幕（优先中文轨，没有中文再回退 _1 源字幕）
     if meta["subtitle_urls"]:
-        sub_url = pick_cn_subtitle(meta["subtitle_urls"])
+        sub_url, sub_data = pick_cn_subtitle(meta["subtitle_urls"])
         try:
-            data = curl_get(sub_url, headers={"Referer": REFERER},
-                            timeout=30, binary=True)
+            data = sub_data or curl_get(sub_url, headers={"Referer": REFERER},
+                                        timeout=30, binary=True)
             with open(os.path.join(outdir, "subtitle.srt"), "wb") as f:
                 f.write(data)
             meta["subtitle_file"] = "subtitle.srt"

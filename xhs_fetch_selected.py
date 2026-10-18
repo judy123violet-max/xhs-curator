@@ -186,6 +186,44 @@ def download(url, path, referer="https://www.xiaohongshu.com/"):
     return len(data)
 
 
+def fetch_bytes(url, referer="https://www.xiaohongshu.com/"):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Referer": referer,
+        "Accept": "*/*",
+    })
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read()
+
+
+def _cjk_ratio(text):
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if "\u4e00" <= c <= "\u9fff") / len(letters)
+
+
+def pick_cn_subtitle(urls, referer):
+    """优先中文轨（中文里取信息最全的一条）；没有中文时回退 _1 源字幕。"""
+    picked = []
+    for u in urls[:4]:
+        try:
+            data = fetch_bytes(u, referer)
+        except Exception:
+            continue
+        text = data.decode("utf-8", "ignore")
+        if text.strip():
+            picked.append((u, data, text))
+        time.sleep(0.2)
+    zh = [p for p in picked if _cjk_ratio(p[2]) >= 0.2]
+    if zh:
+        return max(zh, key=lambda p: len(p[2]))[:2]
+    for u, data, _ in picked:
+        if re.search(r"_1\.srt\?", u):
+            return u, data
+    return (picked[0][0], picked[0][1]) if picked else (None, None)
+
+
 def load_done_index():
     """扫描 downloads/，返回 {note_id: 目录名}（仅 raw.json ok=true 的算完成）"""
     done = {}
@@ -571,12 +609,19 @@ def main():
                     html = page.content()
                 except Exception as e:
                     log("     ! 读取页面失败（字幕检测跳过）:", e)
-            srt = re.findall(r"https://sns-subtitle[^\"\\ ]+\.srt\?[^\"\\ ]+", html) if html else []
+            flat = (html or "").replace("\\u002F", "/").replace("\\u002f", "/")
+            srt = sorted(set(re.findall(
+                r"https://sns-subtitle[^\"\\ ]+\.srt\?[^\"\\ ]+", flat)))
             if srt:
-                u = srt[0].replace("\\u002F", "/")
                 p = os.path.join(folder, "subtitle.srt")
                 try:
-                    download(u, p, referer=url)
+                    u, data = pick_cn_subtitle(srt, url)
+                    if data:
+                        with open(p, "wb") as f:
+                            f.write(data)
+                    else:
+                        u = srt[0]
+                        download(u, p, referer=url)
                     rec["subtitle_file"] = "subtitle.srt"
                     log("     · 已下载官方字幕")
                 except Exception as e:

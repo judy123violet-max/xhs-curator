@@ -323,7 +323,7 @@ downloads/01_笔记标题/
 
 ## 🧪 本地测试
 
-断点续导与序号分配有离线回归测试，不访问小红书：
+断点续导、序号分配与引擎 A 解析有离线回归测试，不访问小红书：
 
 ```bash
 python -m unittest discover -s tests

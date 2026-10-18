@@ -297,7 +297,7 @@ The detail view is embedded, and browser cross-site rules mean it carries no log
 
 ## 🧪 Local tests
 
-Offline regression tests for resume and sequence allocation (no Xiaohongshu requests):
+Offline regression tests for resume, sequence allocation and engine A parsing (no Xiaohongshu requests):
 
 ```bash
 python -m unittest discover -s tests

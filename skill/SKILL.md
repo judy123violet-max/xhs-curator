@@ -181,8 +181,8 @@ tags:
 1. 按「手动路径 A/B/C」正常拉 `discovery/item/<noteId>` SSR HTML（带完整分享 query）。
 2. **先全局把 `\u002F` 还原为 `/`**（node：`html.replace(/\\u002F/g,'/')`），否则 URL 匹配会失败（字幕 URL 深藏在多层 `\\\"` 转义的 JSON 里）。
 3. 用正则抽字幕：`/https:\/\/sns-subtitle[^"\\]+/g`（`[^"\\]` 遇到转义引号自动截断）。一般有 2~3 条：
-   - `*_1.srt` = source 源字幕（通常 zh-CN，**拿这个当逐字稿**）
-   - `*_11.srt` = zh-CN 翻译版、`*_502.srt` = en-US（可忽略）
+   - `*_1.srt` = 源字幕（可能是英文）、`*_11.srt` = 中文翻译、`*_12.srt` = 源字幕副本
+   - 脚本按内容检测语言：**优先中文轨**（中文里取信息最全的一条）；没有中文时回退 `_1` 源字幕。
 4. 下载带 `Referer: https://www.xiaohongshu.com/` + 移动 UA。SRT 就是逐字稿，按时间戳分段整理成 markdown 即可。
 5. 元数据：title/nickname/desc（通常是纯话题标签）/ipLocation/likedCount 等都在 HTML 里；视频时长在 `"duration":<ms>`（毫秒）。
 6. ASR 常见同音错误按上下文修正（实测案例："Web coding"→Vibe Coding、"get/gate"→Git、"spike"→spec、"agent点money down"→AGENTS.md），文档里注明"已修正同音错别字"。
