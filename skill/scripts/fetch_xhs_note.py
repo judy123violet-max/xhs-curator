@@ -14,8 +14,8 @@
       必须用正则从 noteDetailMap / note.data.noteData 区域提取字段。
 
 HTTP 层（2026-10-17 指纹升级 · 重要）:
-  - 普通 curl/urllib/requests 的 TLS 指纹已被平台识别（xhs-curator 窗口
-    2026-10-17 实验记录：连续两天降级，失败模式恶化到整页无笔记数据）。
+  - 普通 curl/urllib/requests 的 TLS 指纹已被平台识别（2026-10-17
+    实验记录：连续两天降级，失败模式恶化到整页无笔记数据）。
   - 现走 curl_cffi 指纹模拟：iPhone UA 配 safari_ios 指纹、桌面 UA 配
     chrome146 指纹（对齐 XHS-Downloader 方案）。curl 子进程仅作
     curl_cffi 不可用时的回退。
