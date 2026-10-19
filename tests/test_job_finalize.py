@@ -103,6 +103,43 @@ class JobFinalizeTest(unittest.TestCase):
         # 日志文件落盘
         self.assertTrue(os.path.exists(os.path.join(self.jobs, rec["job_id"] + ".log")))
 
+    def test_job_state_keeps_running_in_race_window(self):
+        """复验 P0（2026-10-21）：进程已退出、finalize 落盘前的窗口内，
+        job_state() 不得抢跑改 failed——API 必须继续报告可等待的 running，
+        前端才会保持轮询；随后 finalize 落盘为 failed，结果卡才出现。
+
+        窗口态用「真实子进程已退出 + 手工构造快照」确定性复现：
+        （status=running / exit=None / 记录=running，与竞态瞬间完全一致）。
+        """
+        self._fake_script(FAKE_CRASH)
+        jid = self._start()
+        dead_proc = srv.JOB["proc"]            # 真实子进程引用
+        rec = self._wait_settled()             # 等正常终态（failed）
+        self.assertEqual(rec["status"], "failed")
+
+        # —— 重放竞态窗口快照 ——
+        running_rec = {"job_id": jid, "type": "fetch", "status": "running",
+                       "confirmed": False, "stats": None}
+        srv.JOB["status"] = "running"
+        srv.JOB["exit"] = None
+        srv.JOB["record"] = running_rec
+        srv.JOB["proc"] = dead_proc            # 已退出的真实进程
+
+        st = srv.job_state()                   # 窗口内轮询 /api/job 的等价调用
+        self.assertEqual(st["status"], "running")   # 不被抢跑改 failed
+        self.assertFalse(st["running"])             # 进程确实已退出
+        # 前端条件 j.running || j.status==='running' 仍成立 → 继续轮询 ✓
+
+        # finalize 落盘后（此处记录已是 failed）→ 结果卡可见
+        jobs = srv.load_jobs()
+        latest = next(r for r in jobs if r["job_id"] == jid)
+        self.assertEqual(latest["status"], "failed")
+        self.assertFalse(latest.get("confirmed"))
+        # 恢复全局任务状态，避免污染其他用例
+        srv.JOB["status"] = rec["status"]
+        srv.JOB["exit"] = 3
+        srv.JOB["record"] = rec
+
     def test_missing_script_returns_three_tuple(self):
         """脚本缺失分支必须返回三元组，否则 /job/start 解包 500（复验 P1）"""
         srv.FETCH_SCRIPT = os.path.join(self._tmp.name, "no_such_script.py")

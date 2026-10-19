@@ -233,6 +233,10 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
                     logf.flush()
                 except Exception:
                     pass
+            try:
+                p.stdout.close()
+            except Exception:
+                pass
             rc = p.wait()
             try:
                 logf.close()
@@ -243,30 +247,42 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
             JOB["lines"].append(f"=== 任务结束（{'成功' if rc == 0 else f'退出码 {rc}'}）===")
 
         def finalize():
-            """任务结束 → 读脚本回写的统计 → 算状态 → 持久化记录"""
+            """任务结束 → 读脚本回写的统计 → 算状态 → 持久化记录。
+            全程 try/except：任何异常都会把记录明确落为 failed，
+            绝不把任务永久留在 running（2026-10-21 复验修正）。"""
+            rec = dict(JOB.get("record") or {})
             try:
                 rc = p.wait()
-            except Exception:
+            except Exception as e:
+                rec["status"] = "failed"
+                rec["error"] = f"等待进程退出失败: {e}"
+                rec["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                JOB["record"] = rec
+                JOB["status"] = "failed"
+                save_job(rec)
                 return
             try:
                 logf.close()
             except Exception:
                 pass
-            rec = dict(JOB.get("record") or {})
-            if rec.get("job_id") != job_id:
-                return
-            rec["exit_code"] = rc
-            rec["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-            sp = os.path.join(jobs_dir(), job_id + ".stats.json")
-            stats = None
-            if os.path.exists(sp):
-                try:
-                    with open(sp, encoding="utf-8") as f:
-                        stats = json.load(f)
-                except Exception:
-                    stats = None
-            rec["stats"] = stats
-            rec["status"] = compute_job_status(rec["type"], stats, rc)
+            try:
+                if rec.get("job_id") != job_id:
+                    return
+                rec["exit_code"] = rc
+                rec["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                sp = os.path.join(jobs_dir(), job_id + ".stats.json")
+                stats = None
+                if os.path.exists(sp):
+                    try:
+                        with open(sp, encoding="utf-8") as f:
+                            stats = json.load(f)
+                    except Exception:
+                        stats = None
+                rec["stats"] = stats
+                rec["status"] = compute_job_status(rec["type"], stats, rc)
+            except Exception as e:
+                rec["status"] = "failed"
+                rec["error"] = f"统计汇总失败: {e}"
             JOB["record"] = rec
             JOB["status"] = rec["status"]
             save_job(rec)
@@ -277,11 +293,13 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
 
 
 def job_state():
+    """任务状态查询。2026-10-21 复验修正：移除「running 且 exit 未设 → failed」
+    的抢跑兜底——子进程退出后、finalize 写入权威状态前的窗口内，必须继续
+    报告可等待的 running，让前端保持轮询；永久 running 由 finalize 的
+    try/except/finally 兜底防住（异常也会落为 failed）。"""
     with JOB_LOCK:
         p = JOB.get("proc")
         running = bool(p and p.poll() is None)
-        if JOB["status"] == "running" and not running and JOB["exit"] is None:
-            JOB["status"] = "failed"
         return {"status": JOB["status"], "type": JOB["type"], "exit": JOB["exit"],
                 "running": running, "lines": list(JOB["lines"])[-300:]}
 
