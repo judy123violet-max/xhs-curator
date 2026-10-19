@@ -21,7 +21,7 @@ Unlike "paste a link, get a note" or "bulk-download everything" tools, it goes d
 
 ## 🧩 AnyLink to Note · single-link Skill
 
-The `skill/` directory is the AnyLink to Note Skill package: anonymous, login-free, one share link in and the note body, original images and official subtitles out. Videos without subtitles can be transcribed locally with Whisper. For creator comments or whole-profile batches, use the logged-in workbench in this repo.
+The `skill/` directory is the AnyLink to Note Skill package: anonymous, login-free, one share link in and the note body, original images and official subtitles out. Videos without subtitles can be transcribed locally with Whisper. For whole-profile batches or creator comments (login-only; the anonymous single-note channel does not include comments), use the logged-in workbench in this repo.
 
 - Install and usage: [skill/README.md](skill/README.md)
 - Routing rules and boundaries: [skill/SKILL.md](skill/SKILL.md)
@@ -150,7 +150,7 @@ All that's left for you: wait for the install to finish, scan the QR code once.
 |---|---|
 | Python | 3.10+ |
 | Browser | Chrome installed locally |
-| Account | **Optional**. Single-note fetching (anonymous channel) needs none; whole-profile collection / keyword search / single-note imports with author comments need a Xiaohongshu account — scan the QR code **once** on first run; the session is stored in `browser_profile/` |
+| Account | **Optional**. Single-note fetching (anonymous channel) needs none; whole-profile collection / keyword search need a Xiaohongshu account — scan the QR code **once** on first run; the session is stored in `browser_profile/` |
 
 ### 1. Install
 
@@ -224,7 +224,7 @@ downloads/01_note-title/
 
 ### 🔧 How it works
 
-- **Login only when needed**: **single-note fetching runs on an anonymous channel — no login at all** (the server-rendered page already carries the body text and original images). **Whole-profile collection, keyword search, and single-note imports that include author comments** need a login — Playwright drives your real Chrome; scan the QR code once and the session is persisted locally. No passwords involved.
+- **Login only when needed**: **single-note fetching runs on an anonymous channel — no login at all** (the server-rendered page already carries the body text and original images; the comment API requires a session, so anonymous single-note fetches do not include comments). **Whole-profile collection and keyword search** need a login — Playwright drives your real Chrome; scan the QR code once and the session is persisted locally. No passwords involved.
 - **No signature reverse-engineering**: reads the official page state straight from the browser, avoiding encrypted-parameter reverse engineering.
 - **Dual-source listing** (profile / search): merges SSR first-screen data with scroll-loaded API data, so the newest screenful is never missed.
 - **Comments, filtered twice**: first by author (only the creator's own replies — that's where "see comments for details" content lives), then by value (substantive supplements stay, small talk is dropped).
@@ -243,7 +243,7 @@ downloads/01_note-title/
 <details>
 <summary><b>Do I have to log in? What about my password?</b></summary>
 
-It depends: **single-note fetching (anonymous channel) needs no login at all**. Whole-profile collection, keyword search, and single-note imports that include author comments need a login — scan the QR code once and the session is reused locally. The tool never touches your password. `browser_profile/` is gitignored — never commit it.
+It depends: **single-note fetching (anonymous channel) needs no login at all** (comments are only available in logged-in fetches; anonymous single-note fetches do not include them). Whole-profile collection and keyword search need a login — scan the QR code once and the session is reused locally. The tool never touches your password. `browser_profile/` is gitignored — never commit it.
 </details>
 
 <details>
