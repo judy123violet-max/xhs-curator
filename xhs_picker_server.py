@@ -350,13 +350,13 @@ table.done td.t{font-weight:600;max-width:420px}
 </div>
 
 <div class="bar" id="bar">
-  <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#555">
-    <input type="checkbox" id="withComments" checked> 抓取博主评论
+  <label style="display:flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:#1a1a1a">
+    <input type="checkbox" id="withComments"> 抓取博主评论
   </label>
   <button class="primary" id="btnFetch" onclick="startFetch()">开始抓取</button>
   <button onclick="save()">保存选中清单</button>
   <button onclick="copySel()">复制清单文本</button>
-  <span class="tip" id="barTip">点卡片=勾选；点标题或「原文↗」在本窗口看详情，按 Esc 或「← 返回列表」回来，勾选不会丢</span>
+  <span class="tip" id="barTip">点卡片=勾选；点标题或「原文↗」在本窗口看详情，按 Esc 或「← 返回列表」回来，勾选不会丢。⚠ 抓取时会弹出一个专用 Chrome 窗口，抓取进行中请勿关闭它，否则本轮中断（已抓完的不受影响，重新点「开始抓取」自动续）</span>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -561,6 +561,9 @@ async function jobStart(payload){
     $('log').textContent = '';
     $('logStatus').textContent = payload.type==='fetch' ? '抓取运行中…'
       : payload.type==='one' ? '单篇抓取运行中…' : '搜索运行中…';
+    if(payload.type==='fetch' || payload.type==='one'){
+      $('barTip').innerHTML = '<b style="color:#B45309">抓取进行中：会弹出一个专用 Chrome 窗口自动操作，请勿关闭它或按 Esc 关页，避免中断。</b>已抓完的笔记自动跳过；若不小心关了，重新点「开始抓取」会从断点续抓。';
+    }
     $('btnFetch').disabled = true; $('btnSearch').disabled = true;
     $('btnResolve').disabled = true; $('btnFetchOne').disabled = true;
     pollJob();
@@ -632,6 +635,7 @@ function pollJob(){
     $('btnFetch').disabled = false; $('btnSearch').disabled = false;
     $('btnResolve').disabled = false;
     $('btnFetchOne').disabled = !oneResolved;
+    $('barTip').textContent = '点卡片=勾选；点标题或「原文↗」在本窗口看详情，勾选不会丢。⚠ 抓取进行中请勿关闭弹出的专用 Chrome 窗口，否则本轮中断（已抓完的不受影响，重跑自动续）';
     $('logStatus').textContent = j.status==='done' ? '✓ 任务完成' : '任务失败';
     await loadManifest();
     if(j.type==='search'){ await loadList('search', true); if(cur==='search') render(); }
