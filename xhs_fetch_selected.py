@@ -368,6 +368,9 @@ def main():
                     help="无官方字幕视频的本地转写模型（tiny/base/small/medium，默认 small）")
     ap.add_argument("--no-asr", action="store_true",
                     help="跳过本地语音转写（只抓字幕/关键帧；首次用需 pip install faster-whisper）")
+    ap.add_argument("--no-comments", action="store_true",
+                    help="不捕获博主评论（工作台「要保留博主评论吗」选「不要」时使用；"
+                         "默认捕获，导出端再按价值筛选）")
     args = ap.parse_args()
 
     single = bool((args.url or "").strip())
@@ -667,14 +670,19 @@ def main():
                     log(f"     · 无字幕，已存 {len(ff)} 张关键帧")
 
             # 评论区：滚动加载 → 只留博主的发言
-            n_hits = len(comment_hits)
-            scroll_for_comments()
-            ac = collect_author_comments(nid, note_uid)
-            rec["author_comments"] = ac
-            if ac:
-                log(f"     · 博主评论 {len(ac)} 条")
-            elif len(comment_hits) > n_hits:
-                log("     · 评论区无博主发言")
+            #（--no-comments：工作台评论开关选「不要」时跳过，2026-10-19 新增）
+            if getattr(args, "no_comments", False):
+                rec["author_comments"] = []
+                log("     · 按配置跳过博主评论捕获")
+            else:
+                n_hits = len(comment_hits)
+                scroll_for_comments()
+                ac = collect_author_comments(nid, note_uid)
+                rec["author_comments"] = ac
+                if ac:
+                    log(f"     · 博主评论 {len(ac)} 条")
+                elif len(comment_hits) > n_hits:
+                    log("     · 评论区无博主发言")
 
             # raw.json + 骨架 md
             with open(os.path.join(folder, "raw.json"), "w", encoding="utf-8") as f:

@@ -63,28 +63,39 @@ JOB = {"proc": None, "lines": collections.deque(maxlen=800),
 JOB_LOCK = threading.Lock()
 
 
-def start_job(jtype, keyword="", url=""):
+def build_cmd(jtype, keyword="", url="", with_comments=True):
+    """构造后台任务命令行（纯函数，2026-10-19 便于测试评论开关接线）
+
+    返回 (cmd, err)：err 非 None 表示参数无效。
+    with_comments=False 且任务涉及抓取时追加 --no-comments
+    （承接工作台「要保留博主评论吗」询问的「不要」答案）。
+    """
+    if jtype == "fetch":
+        cmd = [sys.executable, FETCH_SCRIPT]
+    elif jtype == "one":
+        if not (url or "").strip():
+            return None, "缺少要抓取的笔记链接"
+        cmd = [sys.executable, FETCH_SCRIPT, "--url", url]
+    elif jtype == "search":
+        if not (keyword or "").strip():
+            return None, "关键词不能为空"
+        cmd = [sys.executable, SEARCH_SCRIPT, "--keyword", keyword]
+    else:
+        return None, f"未知任务类型 {jtype}"
+    if jtype in ("fetch", "one") and not with_comments:
+        cmd.append("--no-comments")
+    return cmd, None
+
+
+def start_job(jtype, keyword="", url="", with_comments=True):
     with JOB_LOCK:
         p = JOB.get("proc")
         if p and p.poll() is None:
             return False, "已有任务在跑（请先停止或等它结束）"
-        if jtype == "fetch":
-            script = FETCH_SCRIPT
-            cmd = [sys.executable, script]
-        elif jtype == "one":
-            url = (url or "").strip()
-            if not url:
-                return False, "缺少要抓取的笔记链接"
-            script = FETCH_SCRIPT
-            cmd = [sys.executable, script, "--url", url]
-        elif jtype == "search":
-            keyword = (keyword or "").strip()
-            if not keyword:
-                return False, "关键词不能为空"
-            script = SEARCH_SCRIPT
-            cmd = [sys.executable, script, "--keyword", keyword]
-        else:
-            return False, f"未知任务类型 {jtype}"
+        cmd, err = build_cmd(jtype, keyword, url, with_comments)
+        if err:
+            return False, err
+        script = cmd[1]
         if not os.path.exists(script):
             return False, f"找不到 {script}"
         JOB["lines"].clear()
@@ -339,6 +350,9 @@ table.done td.t{font-weight:600;max-width:420px}
 </div>
 
 <div class="bar" id="bar">
+  <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#555">
+    <input type="checkbox" id="withComments" checked> 抓取博主评论
+  </label>
   <button class="primary" id="btnFetch" onclick="startFetch()">开始抓取</button>
   <button onclick="save()">保存选中清单</button>
   <button onclick="copySel()">复制清单文本</button>
@@ -555,7 +569,7 @@ async function jobStart(payload){
 }
 function startFetch(){
   if(!state.size){ toast('先勾选要抓的笔记', '#e64545'); return; }
-  jobStart({type:'fetch'});
+  jobStart({type:'fetch', with_comments: $('withComments').checked});
 }
 function startSearch(){
   const kw = $('kw').value.trim();
@@ -595,7 +609,7 @@ async function resolveOne(){
 }
 function fetchOne(){
   if(!oneResolved){ toast('先点「解 析」认出这篇笔记', '#e64545'); return; }
-  jobStart({type:'one', url: oneResolved.url});
+  jobStart({type:'one', url: oneResolved.url, with_comments: $('withComments').checked});
 }
 $('oneUrl').addEventListener('keydown', e=>{ if(e.key==='Enter') resolveOne(); });
 function stopJob(){ fetch('/job/stop', {method:'POST'}); }
@@ -808,7 +822,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/job/start":
             ok, msg = start_job(payload.get("type", ""),
                                 payload.get("keyword", ""),
-                                payload.get("url", ""))
+                                payload.get("url", ""),
+                                bool(payload.get("with_comments", True)))
             self._json({"ok": ok, "error": None if ok else msg})
             return
 
