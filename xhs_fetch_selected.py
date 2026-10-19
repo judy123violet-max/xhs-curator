@@ -355,6 +355,23 @@ def plan_batch(notes_full, done, offset=0, count=0, only="", no_resume=False):
             for i, note in candidates]
 
 
+def job_stats_payload(todo_ids, manifest, skipped=0):
+    """本轮统计（2026-10-20 P0 持久任务结果）：供工作台任务记录消费。
+
+    只统计本轮 todo 里的 note_id（manifest 会合并历史批次记录，按 id 过滤）。
+    failed 条目带可读 error 摘要（缺省「未取得笔记数据」）。
+    """
+    recs = [m for m in manifest if m.get("note_id") in set(todo_ids)]
+    ok = sum(1 for r in recs if r.get("ok"))
+    failed = len(recs) - ok
+    failures = [{"note_id": r.get("note_id"),
+                 "title": (r.get("list_title") or "")[:40],
+                 "error": (r.get("error") or "未取得笔记数据").strip()}
+                for r in recs if not r.get("ok")]
+    return {"planned": len(todo_ids), "ok": ok, "failed": failed,
+            "skipped": skipped, "failures": failures}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="同 --count")
@@ -371,6 +388,8 @@ def main():
     ap.add_argument("--no-comments", action="store_true",
                     help="不捕获博主评论（工作台「要保留博主评论吗」选「不要」时使用；"
                          "默认捕获，导出端再按价值筛选）")
+    ap.add_argument("--only-ids", default="",
+                    help="只抓这些 note_id（逗号分隔）——工作台「仅重试失败项」使用")
     args = ap.parse_args()
 
     single = bool((args.url or "").strip())
@@ -406,6 +425,16 @@ def main():
     count = args.count or args.limit  # --limit 为兼容旧写法
     done = load_done_index()
 
+    # 仅重试失败项（2026-10-20）：工作台结果卡传入失败 note_id 列表，
+    # 只抓这些篇——selection.json 本身不被改写（勾选主权）
+    if args.only_ids and not single:
+        want = {x.strip() for x in args.only_ids.split(",") if x.strip()}
+        notes_full = [n for n in notes_full if n.get("note_id") in want]
+        log(f"[*] 仅重试失败项：过滤后待抓 {len(notes_full)} 篇")
+        if not notes_full:
+            log("[√] 失败条目都不在当前清单里，无需重试")
+            return
+
     # 切片（offset/count）+ 断点跳过；序号优先复用已有目录，避免单篇/批量撞号
     if single:
         todo = [(seq, notes_full[0])]   # 单篇：固定用续好的序号，且总是重抓
@@ -422,8 +451,24 @@ def main():
             f"已完成(断点跳过) {done_in_list} 篇 | 本次待抓 {len(todo)} 篇"
             + (f" | offset={args.offset} count={count}" if (args.offset or count) else ""))
         log("=" * 64)
+    todo_ids = [n.get("note_id") for _, n in todo]
+    skipped = len(notes_full) - len(todo)
+
+    def write_job_stats(manifest_now):
+        """任务统计回写（2026-10-20 P0）：工作台经 XHS_JOB_STATS 指定的路径收集"""
+        p = os.environ.get("XHS_JOB_STATS") or ""
+        if not p:
+            return
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(job_stats_payload(todo_ids, manifest_now, skipped),
+                          f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log(f"! 任务统计回写失败: {e}")
+
     if not todo:
         log("[√] 没有需要抓取的笔记（全部完成或切片为空）")
+        write_job_stats([])
         return
     if not single:
         log("=" * 64)
@@ -741,6 +786,7 @@ def main():
         json.dump(all_recs, f, ensure_ascii=False, indent=2)
 
     okn = sum(1 for m in all_recs if m.get("ok"))
+    write_job_stats(manifest)
     log("\n" + "=" * 64)
     log(f"[√] 本次完成 {len(manifest)} 篇 | 累计 {okn}/{len(all_recs)} 篇，产出在 downloads/")
     for m in all_recs:

@@ -38,6 +38,78 @@ SEL = os.path.join(BASE, "selection.json")
 DOWNLOADS = os.path.join(BASE, "downloads")
 FETCH_SCRIPT = os.path.join(BASE, "xhs_fetch_selected.py")
 SEARCH_SCRIPT = os.path.join(BASE, "xhs_search_fetch.py")
+RUNTIME_DIR = os.path.join(BASE, "runtime")
+JOBS_DIR = os.path.join(RUNTIME_DIR, "jobs")
+
+
+def jobs_dir():
+    """任务记录目录（测试可重定向）"""
+    return JOBS_DIR
+
+
+def new_job_id(jtype):
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + jtype
+
+
+def new_job_record(jtype, selected=0, with_comments=True, only_ids=None):
+    return {"job_id": new_job_id(jtype), "type": jtype,
+            "with_comments": bool(with_comments),
+            "only_ids": list(only_ids or []),
+            "selected": selected,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ended_at": "", "exit_code": None, "status": "running",
+            "confirmed": False, "stats": None}
+
+
+def save_job(rec):
+    os.makedirs(jobs_dir(), exist_ok=True)
+    with open(os.path.join(jobs_dir(), rec["job_id"] + ".json"),
+              "w", encoding="utf-8") as f:
+        json.dump(rec, f, ensure_ascii=False, indent=2)
+
+
+def load_jobs():
+    """最近任务记录（倒序）。数据源是文件——服务重启后仍可追溯"""
+    out = []
+    d = jobs_dir()
+    if os.path.isdir(d):
+        for fn in sorted(os.listdir(d), reverse=True):
+            if fn.endswith(".json"):
+                try:
+                    with open(os.path.join(d, fn), encoding="utf-8") as f:
+                        out.append(json.load(f))
+                except Exception:
+                    continue
+    return out
+
+
+def confirm_job(job_id):
+    for r in load_jobs():
+        if r.get("job_id") == job_id:
+            r["confirmed"] = True
+            save_job(r)
+            return True
+    return False
+
+
+def extract_failed_ids(rec):
+    return [f.get("note_id") for f in (rec.get("stats") or {}).get("failures") or []
+            if f.get("note_id")]
+
+
+def compute_job_status(jtype, stats, exit_code):
+    """不以 exit=0 笼统判定：fetch/one 依赖脚本回写的逐篇统计"""
+    if jtype == "search":
+        return "done" if exit_code == 0 else "failed"
+    if not isinstance(stats, dict):
+        return "failed"               # 子进程异常终止，无统计 → failed
+    ok = stats.get("ok") or 0
+    planned = stats.get("planned") or 0
+    if planned > 0 and ok == planned:
+        return "done"
+    if 0 < ok < planned:
+        return "partial"
+    return "failed"
 
 try:  # 单篇直抓的链接解析复用抓取脚本里的实现
     from xhs_fetch_selected import resolve_note_link
@@ -63,12 +135,13 @@ JOB = {"proc": None, "lines": collections.deque(maxlen=800),
 JOB_LOCK = threading.Lock()
 
 
-def build_cmd(jtype, keyword="", url="", with_comments=True):
+def build_cmd(jtype, keyword="", url="", with_comments=True, only_ids=None):
     """构造后台任务命令行（纯函数，2026-10-19 便于测试评论开关接线）
 
     返回 (cmd, err)：err 非 None 表示参数无效。
     with_comments=False 且任务涉及抓取时追加 --no-comments
     （承接工作台「要保留博主评论吗」询问的「不要」答案）。
+    only_ids 非 None 时（fetch）追加 --only-ids ——「仅重试失败项」。
     """
     if jtype == "fetch":
         cmd = [sys.executable, FETCH_SCRIPT]
@@ -84,26 +157,43 @@ def build_cmd(jtype, keyword="", url="", with_comments=True):
         return None, f"未知任务类型 {jtype}"
     if jtype in ("fetch", "one") and not with_comments:
         cmd.append("--no-comments")
+    if jtype == "fetch" and only_ids:
+        cmd += ["--only-ids", ",".join(only_ids)]
     return cmd, None
 
 
-def start_job(jtype, keyword="", url="", with_comments=True):
+def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
     with JOB_LOCK:
         p = JOB.get("proc")
         if p and p.poll() is None:
-            return False, "已有任务在跑（请先停止或等它结束）"
-        cmd, err = build_cmd(jtype, keyword, url, with_comments)
+            return False, "已有任务在跑（请先停止或等它结束）", ""
+        cmd, err = build_cmd(jtype, keyword, url, with_comments, only_ids)
         if err:
-            return False, err
+            return False, err, ""
         script = cmd[1]
+        selected = 0
+        if jtype == "fetch":
+            selected = len((load_json(SEL) or {}).get("notes") or [])
+        elif jtype == "one":
+            selected = 1
+        rec = new_job_record(jtype, selected=selected,
+                             with_comments=with_comments, only_ids=only_ids)
+        save_job(rec)
         if not os.path.exists(script):
             return False, f"找不到 {script}"
         JOB["lines"].clear()
         JOB["type"] = jtype
         JOB["exit"] = None
         JOB["status"] = "running"
+        JOB["job_id"] = rec["job_id"]
+        JOB["record"] = rec
         try:
-            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+            os.makedirs(jobs_dir(), exist_ok=True)
+            env = {**os.environ,
+                   "PYTHONIOENCODING": "utf-8",
+                   "XHS_JOB_STATS": os.path.join(jobs_dir(), rec["job_id"] + ".stats.json")}
+            logf = open(os.path.join(jobs_dir(), rec["job_id"] + ".log"),
+                        "w", encoding="utf-8")
             p = subprocess.Popen(cmd, cwd=BASE, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True,
                                  encoding="utf-8", errors="replace",
@@ -112,20 +202,59 @@ def start_job(jtype, keyword="", url="", with_comments=True):
             JOB["status"] = "failed"
             JOB["exit"] = -1
             JOB["lines"].append(f"[X] 启动失败: {e}")
-            return False, str(e)
+            rec["status"] = "failed"
+            rec["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            rec["exit_code"] = -1
+            save_job(rec)
+            return False, str(e), rec["job_id"]
         JOB["proc"] = p
+        job_id = rec["job_id"]
 
         def pump():
             for ln in p.stdout:
                 JOB["lines"].append(ln.rstrip())
+                try:
+                    logf.write(ln.rstrip() + "\n")
+                    logf.flush()
+                except Exception:
+                    pass
             rc = p.wait()
+            try:
+                logf.close()
+            except Exception:
+                pass
             JOB["exit"] = rc
-            JOB["status"] = "done" if rc == 0 else "failed"
             JOB["lines"].append("")
             JOB["lines"].append(f"=== 任务结束（{'成功' if rc == 0 else f'退出码 {rc}'}）===")
 
+        def finalize():
+            """任务结束 → 读脚本回写的统计 → 算状态 → 持久化记录"""
+            try:
+                rc = p.wait()
+            except Exception:
+                return
+            rec = dict(JOB.get("record") or {})
+            if rec.get("job_id") != job_id:
+                return
+            rec["exit_code"] = rc
+            rec["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            sp = os.path.join(jobs_dir(), job_id + ".stats.json")
+            stats = None
+            if os.path.exists(sp):
+                try:
+                    with open(sp, encoding="utf-8") as f:
+                        stats = json.load(f)
+                except Exception:
+                    stats = None
+            rec["stats"] = stats
+            rec["status"] = compute_job_status(rec["type"], stats, rc)
+            JOB["record"] = rec
+            JOB["status"] = rec["status"]
+            save_job(rec)
+
         threading.Thread(target=pump, daemon=True).start()
-        return True, "started"
+        threading.Thread(target=finalize, daemon=True).start()
+        return True, "started", job_id, rec["job_id"]
 
 
 def job_state():
@@ -336,6 +465,7 @@ table.done td.t{font-weight:600;max-width:420px}
   <div class="meta" id="listMeta" style="margin-top:6px"></div>
 </header>
 
+<div id="jobCard" style="display:none"></div>
 <div class="grid" id="grid"></div>
 <div id="doneWrap" style="display:none"></div>
 <div id="oneWrap" style="display:none"></div>
@@ -677,8 +807,72 @@ function copySel(){
 $('q').addEventListener('input', render);
 $('kw').addEventListener('keydown', e=>{ if(e.key==='Enter') startSearch(); });
 
+/* ---------- 持久任务结果卡（2026-10-20 P0） ---------- */
+const TIP_DEFAULT = '点卡片=勾选；点标题或「原文↗」在本窗口看详情，勾选不会丢。⚠ 抓取进行中请勿关闭弹出的专用 Chrome 窗口，否则本轮中断（已抓完的不受影响，重跑自动续）';
+async function loadJobCard(){
+  let j;
+  try{ j = await (await fetch('/api/jobs')).json(); }catch(e){ return; }
+  const card = $('jobCard');
+  const latest = (j.jobs||[]).find(x => !x.confirmed && x.status !== 'running');
+  if(!latest){ card.style.display='none'; card.innerHTML=''; return; }
+  const st = latest.stats || {};
+  const okN = st.ok ?? 0, fN = st.failed ?? 0, skN = st.skipped ?? 0;
+  let head = '', btns = '';
+  if(latest.status === 'done'){
+    head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
+    btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
+  }else if(latest.status === 'partial'){
+    head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
+  }else{
+    head = `<b style="color:#e64545">✗ 上次抓取失败</b>` + (latest.stats ? `（成功 ${okN} · 失败 ${fN}）` : '（进程异常终止，无统计；已抓完的自动跳过）');
+  }
+  if(latest.status !== 'done'){
+    btns += ` <button onclick="toggleFailures()">查看失败原因</button>`;
+    btns += ` <button class="teal" onclick="retryFailed('${latest.job_id}')">仅重试失败项</button>`;
+  }
+  btns += ` <button onclick="confirmJob('${latest.job_id}')">知道了</button>`;
+  const fails = (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('');
+  card.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:10px 16px;background:var(--bg2,#F7F8FA)">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${head}
+      <span style="font-size:11px;color:#888">${latest.started_at||''} · ${latest.type}${latest.with_comments===false?' · 不抓评论':''}</span>
+      <span style="flex:1"></span>${btns}
+    </div>
+    ${latest.status==='done'?'<div class="meta" style="margin-top:6px">下一步：回到 Agent 对话说「导入 Obsidian」，我会用本地转换把它接进导出管线（不重抓）。</div>':''}
+    <ul id="failList" style="display:none;margin:8px 0 0;color:#7a3b3b;font-size:12px">${fails}</ul>
+  </div>`;
+  card.style.display = 'block';
+}
+function toggleFailures(){
+  const el = document.getElementById('failList');
+  if(el) el.style.display = el.style.display==='none' ? 'block' : 'none';
+}
+async function confirmJob(jid){
+  try{ await fetch('/api/jobs/' + jid + '/confirm', {method:'POST'}); }catch(e){}
+  await loadJobCard();
+}
+async function retryFailed(jid){
+  try{
+    const r = await fetch('/api/retry_failed', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({job_id: jid})});
+    const j = await r.json();
+    if(!j.ok){ toast(j.error || '重试启动失败', '#e64545'); return; }
+    $('jobCard').style.display = 'none';
+    $('logpanel').style.display = 'flex';
+    $('log').textContent = '';
+    $('logStatus').textContent = '失败项重试运行中…';
+    if(payloadTypeWarn) payloadTypeWarn();
+    $('btnFetch').disabled = true; $('btnSearch').disabled = true;
+    $('btnResolve').disabled = true; $('btnFetchOne').disabled = true;
+    pollJob();
+  }catch(e){ toast('重试启动失败: ' + e, '#e64545'); }
+}
+function payloadTypeWarn(){
+  $('barTip').innerHTML = '<b style="color:#B45309">抓取进行中：会弹出一个专用 Chrome 窗口自动操作，请勿关闭它或按 Esc 关页，避免中断。</b>已抓完的笔记自动跳过；若不小心关了，重新点「开始抓取」会从断点续抓。';
+}
+
 (async function init(){
   await loadManifest();
+  loadJobCard();
   await switchTab('main');
   persist();
   try{
@@ -735,6 +929,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, data, ct)
             except Exception as e:
                 self._send(502, f"img fail: {e}".encode(), "text/plain")
+            return
+
+        if u.path == "/api/jobs":
+            self._json({"ok": True, "jobs": load_jobs()[-20:],
+                        "running": (JOB.get("record") or {}).get("job_id", "")
+                        if JOB.get("status") == "running" else ""})
+            return
+
+        if u.path.startswith("/api/jobs/") and u.path.endswith("/log"):
+            jid = u.path[len("/api/jobs/"):-len("/log")]
+            lp = os.path.join(jobs_dir(), jid + ".log")
+            if os.path.exists(lp):
+                with open(lp, encoding="utf-8", errors="replace") as f:
+                    self._json({"ok": True, "log": f.read()[-20000:]})
+            else:
+                self._json({"ok": False, "error": "无该任务日志"})
             return
 
         if u.path == "/api/list":
@@ -823,12 +1033,33 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "error": str(e)})
             return
 
+        if self.path.startswith("/api/jobs/") and self.path.endswith("/confirm"):
+            jid = self.path[len("/api/jobs/"):-len("/confirm")]
+            self._json({"ok": confirm_job(jid)})
+            return
+
+        if self.path == "/api/retry_failed":
+            jid = (payload.get("job_id") or "").strip()
+            rec = next((r for r in load_jobs() if r.get("job_id") == jid), None)
+            if not rec:
+                self._json({"ok": False, "error": "找不到该任务记录"})
+                return
+            failed = extract_failed_ids(rec)
+            if not failed:
+                self._json({"ok": False, "error": "该任务没有可重试的失败条目"})
+                return
+            ok, msg, njid = start_job("fetch", with_comments=rec.get("with_comments", True),
+                                      only_ids=failed)
+            self._json({"ok": ok, "error": None if ok else msg, "job_id": njid})
+            return
+
         if self.path == "/job/start":
-            ok, msg = start_job(payload.get("type", ""),
-                                payload.get("keyword", ""),
-                                payload.get("url", ""),
-                                bool(payload.get("with_comments", True)))
-            self._json({"ok": ok, "error": None if ok else msg})
+            ok, msg, jid = start_job(payload.get("type", ""),
+                                     payload.get("keyword", ""),
+                                     payload.get("url", ""),
+                                     bool(payload.get("with_comments", True)),
+                                     payload.get("only_ids") or None)
+            self._json({"ok": ok, "error": None if ok else msg, "job_id": jid})
             return
 
         if self.path == "/api/resolve":
