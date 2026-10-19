@@ -422,6 +422,23 @@ def safe_stem(s, maxlen=60):
     return s[:maxlen] or "未命名"
 
 
+def srt_to_text(raw):
+    """SRT → 可读纯文本（2026-10-19 验收缺陷修复）：
+    去序号行与时间轴行、去 HTML 标签，压缩连续重复行（滚动字幕每条 cue
+    常复述上一条尾部）。只做保守清理，不重排语序。"""
+    out, prev = [], None
+    for ln in raw.replace("\r\n", "\n").split("\n"):
+        s = ln.strip()
+        if not s or re.fullmatch(r"\d+", s) or "-->" in s:
+            continue
+        s = re.sub(r"<[^>]+>", "", s).strip()
+        if not s or s == prev:
+            continue
+        out.append(s)
+        prev = s
+    return "\n".join(out)
+
+
 def write_markdown(meta, outdir):
     """单篇正式交付物：持久 .md 文稿（2026-10-19 实施计划 §3.1）
 
@@ -458,18 +475,28 @@ def write_markdown(meta, outdir):
                 lines.append("")
 
     if is_video:
+        # 字幕/转写（2026-10-19 验收缺陷修复）：字幕正文要写进文稿（不只给
+        # 附件链接）；「未取得」警告仅在既无官方字幕、也无本地转写时出现
+        srt_text = ""
         if meta.get("subtitle_file") and os.path.exists(
                 os.path.join(outdir, meta["subtitle_file"])):
-            lines += ["## 字幕（官方）", "",
-                      f"字幕文件：[{meta['subtitle_file']}]({meta['subtitle_file']})",
-                      ""]
+            try:
+                with open(os.path.join(outdir, meta["subtitle_file"]),
+                          encoding="utf-8", errors="replace") as f:
+                    srt_text = srt_to_text(f.read())
+            except Exception:
+                srt_text = ""
+        if srt_text:
+            lines += ["## 字幕（官方）", "", srt_text, "",
+                      f"> 原始字幕文件：[{meta['subtitle_file']}]"
+                      f"({meta['subtitle_file']})", ""]
         tf = meta.get("transcript_file") or ""
         tp = os.path.join(outdir, tf) if tf else ""
         if tf and os.path.exists(tp):
             with open(tp, encoding="utf-8") as f:
                 txt = f.read().strip()
             lines += ["## 语音转写（本地 Whisper，可能有少量识别误差）", "", txt, ""]
-        else:
+        elif not srt_text:
             lines += ["> ⚠ 未取得字幕/转写（无官方字幕且本地转写不可用），"
                       "重跑本脚本可补。", ""]
 

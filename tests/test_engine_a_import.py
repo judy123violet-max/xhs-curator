@@ -92,6 +92,32 @@ class EngineAMarkdownTest(unittest.TestCase):
         _, txt = self._read_md(meta)
         self.assertIn("未取得字幕/转写", txt)
 
+    def test_video_with_official_subs_embeds_text_no_warning(self):
+        """有官方字幕、无转写：字幕正文进文稿，且不出现缺失警告（P1 缺陷回归）"""
+        srt = "1\n00:00:01,000 --> 00:00:03,000\n大家好，<i>今天</i>聊聊选型\n\n" \
+              "2\n00:00:03,200 --> 00:00:05,000\n大家好，<i>今天</i>聊聊选型\n\n" \
+              "3\n00:00:05,200 --> 00:00:08,000\n第二句内容\n"
+        with open(os.path.join(self.src, "subtitle.srt"), "w", encoding="utf-8") as f:
+            f.write(srt)
+        meta = make_a_package(self.src, video=True, with_transcript=False)
+        meta["subtitle_file"] = "subtitle.srt"
+        fa.write_markdown(meta, self.src)
+        _, txt = self._read_md(meta)
+        self.assertIn("## 字幕（官方）", txt)
+        self.assertIn("第二句内容", txt)                 # 字幕正文可读
+        self.assertIn("原始字幕文件", txt)               # .srt 链接保留为附件
+        self.assertNotIn("未取得字幕/转写", txt)          # 不再误报缺失
+        self.assertNotIn("<i>", txt)                     # HTML 标签已剥
+        self.assertEqual(txt.count("大家好，今天聊聊选型"), 1)  # 连续重复行压缩
+
+    def test_video_with_transcript_no_warning(self):
+        """有本地转写、无官方字幕：输出转写正文且不显示缺失警告"""
+        meta = make_a_package(self.src, video=True, with_transcript=True)
+        fa.write_markdown(meta, self.src)
+        _, txt = self._read_md(meta)
+        self.assertIn("这是语音转写的内容。", txt)
+        self.assertNotIn("未取得字幕/转写", txt)
+
     def test_image_note_md_references_images(self):
         meta = make_a_package(self.src, video=False, with_cover=False)
         imgdir = os.path.join(self.src, "imgs")
