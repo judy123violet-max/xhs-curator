@@ -484,6 +484,8 @@ def main():
                     help="导出视频关键帧（默认关闭：视频产物 v2 由 AI 结构化整理判断干货）")
     ap.add_argument("--force-ocr", action="store_true",
                     help="覆盖 OCR 价值闸门的跳过决定：凡有转录文字的图一律去图留文")
+    ap.add_argument("--video-cover", action="store_true",
+                    help="导出视频封面图（默认关闭：封面留档 downloads，产物只含正文+字幕/转写）")
     ap.add_argument("--ocr-dry-run", action="store_true",
                     help="只输出逐图「建议OCR/跳过原因」报告，不写任何文件")
     args = ap.parse_args()
@@ -529,6 +531,13 @@ def main():
         # 无状态文件 → 退回旧版逐图启发式，行为不变
         folder = os.path.join(SRC, d)
         images = r.get("images") or []
+        # 视频封面默认不导出（2026-10-19 雅旭拍板 B，对齐关键帧 v2 逻辑）：
+        # 封面在小红书是 imageList 原生数据，留档 downloads 即可；
+        # 产物只含正文+字幕/转写。--video-cover 可手动恢复嵌入
+        video_cover_skipped = False
+        if ntype == "视频" and images and not args.video_cover:
+            video_cover_skipped = True
+            images = []
         ocr_map = load_ocr(folder) if images else {}
         status_list = load_ocr_status(folder) if images else None
         img_plan = plan_images(images, ocr_map, status_list, args.force_ocr)
@@ -735,7 +744,8 @@ def main():
         log(f"  √ {md_name}  (图 {len(img_files)}/{len(img_plan)})"
             + ("  [全文转文字，未拷图]" if text_only
                else (f"  [{len(img_plan) - len(img_files)} 张干货图转文字]"
-                     if len(img_files) < len(img_plan) else "")))
+                     if len(img_files) < len(img_plan) else ""))
+            + ("  [视频封面未导出]" if video_cover_skipped else ""))
 
     # 索引页
     uniq = sorted(a for a in authors if a)
