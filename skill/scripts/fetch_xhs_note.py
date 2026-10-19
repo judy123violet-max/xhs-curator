@@ -416,6 +416,70 @@ def download_images(urls, outdir):
     return paths
 
 
+def safe_stem(s, maxlen=60):
+    """标题 → 文件名安全子串"""
+    s = re.sub(r'[\\/:*?"<>|\r\n\t]', "", s or "").strip()
+    return s[:maxlen] or "未命名"
+
+
+def write_markdown(meta, outdir):
+    """单篇正式交付物：持久 .md 文稿（2026-10-19 实施计划 §3.1）
+
+    - 图片用相对引用 imgs/note_XX.jpg：md 与 imgs/ 文件夹一起保留即可访问
+    - 视频只带字幕/转写，不带封面（封面留档，雅旭 2026-10-19 拍板 B）
+    - 转写失败不阻断：正文照常产出，并显式标注「未取得字幕/转写」
+    - 返回 md 路径，文件名记录进 meta["markdown_file"]
+    """
+    lines = [f"# {meta.get('title') or '未命名笔记'}", ""]
+    info = []
+    if meta.get("author"):
+        info.append(f"作者：{meta['author']}")
+    t = meta.get("time_ms") or 0
+    if t:
+        info.append("发布：" + time.strftime("%Y-%m-%d", time.localtime(t / 1000)))
+    if meta.get("ip_location"):
+        info.append(meta["ip_location"])
+    if meta.get("source_url"):
+        info.append(f"[原笔记链接]({meta['source_url']})")
+    if info:
+        lines += ["> " + " ｜ ".join(info), ""]
+
+    body = (meta.get("desc") or "").strip()
+    if body:
+        lines += [body, ""]
+
+    is_video = (meta.get("type") == "video")
+    if not is_video:
+        imgs = meta.get("local_images") or []
+        if imgs:
+            lines += ["## 图片", ""]
+            for i, p in enumerate(imgs, 1):
+                lines.append(f"![图{i}](imgs/{os.path.basename(p)})")
+                lines.append("")
+
+    if is_video:
+        if meta.get("subtitle_file") and os.path.exists(
+                os.path.join(outdir, meta["subtitle_file"])):
+            lines += ["## 字幕（官方）", "",
+                      f"字幕文件：[{meta['subtitle_file']}]({meta['subtitle_file']})",
+                      ""]
+        tf = meta.get("transcript_file") or ""
+        tp = os.path.join(outdir, tf) if tf else ""
+        if tf and os.path.exists(tp):
+            with open(tp, encoding="utf-8") as f:
+                txt = f.read().strip()
+            lines += ["## 语音转写（本地 Whisper，可能有少量识别误差）", "", txt, ""]
+        else:
+            lines += ["> ⚠ 未取得字幕/转写（无官方字幕且本地转写不可用），"
+                      "重跑本脚本可补。", ""]
+
+    path = os.path.join(outdir, safe_stem(meta.get("title")) + ".md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    meta["markdown_file"] = os.path.basename(path)
+    return path
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -501,9 +565,11 @@ def main():
                     os.remove(vp)   # 转写完即删，不占空间
         elif vurl and no_asr:
             print("[3.5/4] --no-asr：跳过语音转写")
-        else:
+        elif meta.get("type") == "video":
             print("[3.5/4] 无官方字幕且未取到视频流（降级页），跳过转写——"
                   "重跑本脚本可补")
+        else:
+            print("[3.5/4] 图文笔记，无字幕环节")
 
     # 图片
     if meta["image_urls"]:
@@ -517,11 +583,21 @@ def main():
         print("[4/4] 无图片（视频笔记正常）")
 
     meta_path = os.path.join(outdir, "metadata.json")
+
+    # 正式交付物：持久 .md 文稿（2026-10-19 实施计划 §3.1）
+    md_path = ""
+    try:
+        md_path = write_markdown(meta, outdir)
+    except Exception as e:
+        print(f"! Markdown 生成失败（不影响其余产出）: {e}")
+
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
     print("\n===== 完成 =====")
     print(f"元数据: {meta_path}")
+    if md_path:
+        print(f"文稿:   {md_path}")
     if meta.get("subtitle_file"):
         print(f"字幕: {os.path.join(outdir, 'subtitle.srt')}")
     print(f"图片: {len(meta['local_images'])} 张"

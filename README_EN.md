@@ -21,7 +21,7 @@ Unlike "paste a link, get a note" or "bulk-download everything" tools, it goes d
 
 ## 🧩 AnyLink to Note · single-link Skill
 
-The `skill/` directory is the AnyLink to Note Skill package: anonymous, login-free, one share link in and the note body, original images and official subtitles out. Videos without subtitles can be transcribed locally with Whisper. For whole-profile batches or creator comments (login-only; the anonymous single-note channel does not include comments), use the logged-in workbench in this repo.
+The `skill/` directory is the AnyLink to Note Skill package: anonymous, login-free, one share link in and a **Markdown deliverable** out (body text, relatively-linked original images, official subtitles or local Whisper transcription; video covers stay archived and are not included). When you want it in Obsidian, just say "import to Obsidian" — a local conversion feeds the export pipeline with **no re-fetching and no login**. For whole-profile batches or creator comments, use the logged-in workbench (comments are login-only; the anonymous single-note channel does not include them).
 
 - Install and usage: [skill/README.md](skill/README.md)
 - Routing rules and boundaries: [skill/SKILL.md](skill/SKILL.md)
@@ -243,7 +243,7 @@ downloads/01_note-title/
 <details>
 <summary><b>Do I have to log in? What about my password?</b></summary>
 
-It depends: **single-note fetching (anonymous channel) needs no login at all** (comments are only available in logged-in fetches; anonymous single-note fetches do not include them). Whole-profile collection and keyword search need a login — scan the QR code once and the session is reused locally. The tool never touches your password. `browser_profile/` is gitignored — never commit it.
+It depends: **single-note fetching (anonymous channel) needs no login at all** — the .md deliverable is produced right away, and importing to Obsidian is a local conversion (no re-fetch, no login; comments are only available in logged-in fetches). Whole-profile collection and keyword search need a login — scan the QR code once and the session is reused locally. The tool never touches your password. `browser_profile/` is gitignored — never commit it.
 </details>
 
 <details>

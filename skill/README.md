@@ -57,17 +57,21 @@ python skill/scripts/fetch_xhs_note.py "<链接>" "<输出目录>" --no-asr
 python skill/scripts/fetch_xhs_note.py "<链接>" "<输出目录>" --whisper-model small
 ```
 
-## 接入 Obsidian（引擎 B 的导出管线）
+## 交付物与接入 Obsidian
+
+**单篇成功后直接产出 `.md` 文稿**（`<输出目录>/<标题>.md`：正文 + 图片相对引用 `imgs/` + 字幕/转写；视频封面留档不进文稿）——文件夹一起保存即可阅读、可分发。
+
+要存入 Obsidian 时（**无需重抓、无需登录**）：
 
 ```bash
-# 1. 引擎 A 产物转成 downloads/ 结构
+# 1. 引擎 A 原料包本地转成 downloads/ 契约（只转换已有数据，不访问小红书）
 python skill/scripts/to_downloads.py "<引擎A输出目录>"
 
 # 2. 用仓库根的导出器写进 Obsidian
 python xhs_export_md.py --dest "<你的 Obsidian 库目录>"
 ```
 
-需要博主评论时，改用引擎 B：
+需要博主评论时，改用引擎 B（评论是登录态独占能力）：
 
 ```bash
 python xhs_fetch_selected.py --url "<链接>"

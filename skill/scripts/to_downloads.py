@@ -97,6 +97,21 @@ def convert(src, downloads):
             shutil.copy2(sp, os.path.join(folder, "subtitle.srt"))
             subtitle_file = "subtitle.srt"
 
+    # 语音转写（无字幕视频的 transcript.txt：2026-10-19 实施计划 §3.2，
+    # 转换不得丢失可用的本地转写）
+    transcript_file = ""
+    if meta.get("transcript_file"):
+        tp = os.path.join(src, meta["transcript_file"])
+        if os.path.exists(tp):
+            shutil.copy2(tp, os.path.join(folder, "transcript.txt"))
+            transcript_file = "transcript.txt"
+
+    # AI 侧 OCR 产物（如有）：原样带过，导出层直接消费
+    for name in ("ocr_status.json", "ocr.md"):
+        p = os.path.join(src, name)
+        if os.path.exists(p):
+            shutil.copy2(p, os.path.join(folder, name))
+
     # 视频流 URL（B 侧 raw.json 不存，但留着无妨；export 不读）
     rec = {
         "ok": True,
@@ -112,6 +127,7 @@ def convert(src, downloads):
         "ip": meta.get("ip_location") or "",
         "images": images,
         "subtitle_file": subtitle_file,
+        "transcript_file": transcript_file,
         "frame_files": [],
         "author_comments": [],  # 引擎 A 拿不到评论（登录态独占），如实留空
         "via": "engineA",       # 来源标记，便于区分与追溯
@@ -138,6 +154,7 @@ def convert(src, downloads):
 
     print(f"[√] 已入库: {folder}")
     print(f"    图 {len(images)} | 字幕 {'有' if subtitle_file else '无'}"
+          f" | 转写 {'有' if transcript_file else '无'}"
           f" | 评论 无（引擎 A 不抓评论，需要请走引擎 B --url）")
     return True
 
