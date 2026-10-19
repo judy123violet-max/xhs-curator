@@ -19,13 +19,6 @@ Unlike "paste a link, get a note" or "bulk-download everything" tools, it goes d
 
 **Who it's for**: people who treat Xiaohongshu as an information source and want to keep it in a knowledge base (job-hunting notes, industry experience, tutorials, competitor research).
 
-## 🧩 AnyLink to Note · single-link Skill
-
-The `skill/` directory is the AnyLink to Note Skill package: anonymous, login-free, one share link in and a **Markdown deliverable** out (body text, relatively-linked original images, official subtitles or local Whisper transcription; video covers stay archived and are not included). When you want it in Obsidian, just say "import to Obsidian" — a local conversion feeds the export pipeline with **no re-fetching and no login**. For whole-profile batches or creator comments, use the logged-in workbench (comments are login-only; the anonymous single-note channel does not include them).
-
-- Install and usage: [skill/README.md](skill/README.md)
-- Routing rules and boundaries: [skill/SKILL.md](skill/SKILL.md)
-
 ## 🎁 What you get
 
 A real export sample (content omitted):

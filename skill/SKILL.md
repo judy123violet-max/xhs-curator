@@ -3,7 +3,7 @@ name: xhs-note-reader
 description: 把小红书分享短链（xhslink.cn）或 explore 链接里的图文笔记，提取原图、多模态识别全部文字、并整理成结构化的 markdown 文档（含摘要/章节/Q&A/关键词）；也覆盖"抓某个博主主页的全部笔记"（整号列表 + 勾选下载）。当用户给一个 xiaohongshu.com / xhslink.cn 链接、或博主主页链接，并要求"整理笔记/抓图片/导出文档/抓这个号所有笔记/复盘面经"时使用。**核心抓取思路：不要走 JS 渲染或登录态，直接请求服务端渲染的 HTML 拿高清无水印原图 URL（⚠️ 页面结构 2026-10-16 已变：老 `noteDetailMap` + `urlDefault` → 新 `note.data.noteData` + `imageList[].url`，脚本已双兼容），再下载 + 多模态识别；整号抓取则读 SPA store 的 `_rawValue`。**
 ---
 
-# 小红书图文笔记 → 结构化文档（AnyLink 2 Note · 引擎 A）
+# 小红书图文笔记 → 结构化文档（单篇 Skill · 引擎 A）
 
 > 本 Skill 位于 xhs-curator 仓库的 `skill/` 目录；下文 `../` 指仓库根目录。
 
