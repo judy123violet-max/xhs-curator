@@ -48,7 +48,8 @@ def jobs_dir():
 
 
 def new_job_id(jtype):
-    return time.strftime("%Y%m%d-%H%M%S") + "-" + jtype
+    ms = (time.time_ns() // 10**6) % 1000
+    return time.strftime("%Y%m%d-%H%M%S") + f"-{ms:03d}-{jtype}"
 
 
 def new_job_record(jtype, selected=0, with_comments=True, only_ids=None):
@@ -95,6 +96,20 @@ def confirm_job(job_id):
 def extract_failed_ids(rec):
     return [f.get("note_id") for f in (rec.get("stats") or {}).get("failures") or []
             if f.get("note_id")]
+
+
+def compute_card_actions(rec):
+    """结果卡按钮可见性（后端下发 → 前端只渲染，行为可单测）：
+    - done：查看已抓笔记
+    - partial/failed 且有失败条目：查看失败原因 + 仅重试失败项
+    - failed 且无失败条目（崩溃无统计）：查看运行日志（不是必然可重试）
+    """
+    failed_ids = extract_failed_ids(rec)
+    status = rec.get("status")
+    return {"view_notes": status == "done",
+            "retry": status in ("partial", "failed") and bool(failed_ids),
+            "failures": status in ("partial", "failed") and bool(failed_ids),
+            "log": status == "failed"}
 
 
 def compute_job_status(jtype, stats, exit_code):
@@ -171,6 +186,8 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
         if err:
             return False, err, ""
         script = cmd[1]
+        if not os.path.exists(script):
+            return False, f"找不到 {script}", ""
         selected = 0
         if jtype == "fetch":
             selected = len((load_json(SEL) or {}).get("notes") or [])
@@ -179,8 +196,6 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
         rec = new_job_record(jtype, selected=selected,
                              with_comments=with_comments, only_ids=only_ids)
         save_job(rec)
-        if not os.path.exists(script):
-            return False, f"找不到 {script}"
         JOB["lines"].clear()
         JOB["type"] = jtype
         JOB["exit"] = None
@@ -233,6 +248,10 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
                 rc = p.wait()
             except Exception:
                 return
+            try:
+                logf.close()
+            except Exception:
+                pass
             rec = dict(JOB.get("record") or {})
             if rec.get("job_id") != job_id:
                 return
@@ -254,7 +273,7 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
 
         threading.Thread(target=pump, daemon=True).start()
         threading.Thread(target=finalize, daemon=True).start()
-        return True, "started", job_id, rec["job_id"]
+        return True, "started", job_id
 
 
 def job_state():
@@ -756,7 +775,10 @@ function pollJob(){
     const pre = $('log');
     pre.textContent = (j.lines||[]).join('\n');
     pre.scrollTop = pre.scrollHeight;
-    if(j.running){
+    // 完成竞态（2026-10-20 复验）：子进程退出后 finalize 可能尚未写完
+    // 最终 status——running=false 但 status 仍是 running 时继续轮询，
+    // 直到后端写入权威状态，再以持久结果卡作为完成反馈
+    if(j.running || j.status === 'running'){
       $('logStatus').textContent = (j.type==='fetch' ? '抓取'
         : j.type==='one' ? '单篇抓取' : '搜索') + '运行中…';
       return;
@@ -766,7 +788,8 @@ function pollJob(){
     $('btnResolve').disabled = false;
     $('btnFetchOne').disabled = !oneResolved;
     $('barTip').textContent = '点卡片=勾选；点标题或「原文↗」在本窗口看详情，勾选不会丢。⚠ 抓取进行中请勿关闭弹出的专用 Chrome 窗口，否则本轮中断（已抓完的不受影响，重跑自动续）';
-    $('logStatus').textContent = j.status==='done' ? '✓ 任务完成' : '任务失败';
+    $('logStatus').textContent = j.status==='done' ? '✓ 任务完成'
+      : j.status==='partial' ? '⚠ 部分完成（详见结果卡）' : '任务失败（详见结果卡）';
     await loadManifest();
     if(j.type==='search'){ await loadList('search', true); if(cur==='search') render(); }
     if(cur==='done') renderDone(); else if(cur!=='done' && cur!=='one') render();
@@ -779,8 +802,10 @@ function pollJob(){
     } else if(j.status==='done'){
       toast('完成');
     } else {
-      toast('任务失败，看日志找原因', '#e64545');
+      toast('任务结束：' + j.status + '，结果与下一步见下方结果卡', '#B45309');
     }
+    // 完成反馈以持久结果卡为准（P0），不再只靠一次性 Toast
+    await loadJobCard();
   }, 1200);
 }
 
@@ -817,21 +842,23 @@ async function loadJobCard(){
   if(!latest){ card.style.display='none'; card.innerHTML=''; return; }
   const st = latest.stats || {};
   const okN = st.ok ?? 0, fN = st.failed ?? 0, skN = st.skipped ?? 0;
+  const act = latest.actions || {};
   let head = '', btns = '';
   if(latest.status === 'done'){
     head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
-    btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
+    if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
   }else if(latest.status === 'partial'){
     head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
   }else{
     head = `<b style="color:#e64545">✗ 上次抓取失败</b>` + (latest.stats ? `（成功 ${okN} · 失败 ${fN}）` : '（进程异常终止，无统计；已抓完的自动跳过）');
   }
-  if(latest.status !== 'done'){
-    btns += ` <button onclick="toggleFailures()">查看失败原因</button>`;
-    btns += ` <button class="teal" onclick="retryFailed('${latest.job_id}')">仅重试失败项</button>`;
-  }
+  // 按钮按后端下发的 actions 渲染（2026-10-20 复验）：
+  // 无失败明细（崩溃无统计）→「查看运行日志」，绝不显示必然空转的重试按钮
+  if(act.log) btns += ` <button onclick="viewJobLog('${latest.job_id}')">查看运行日志</button>`;
+  if(act.failures) btns += ` <button onclick="toggleFailures()">查看失败原因</button>`;
+  if(act.retry) btns += ` <button class="teal" onclick="retryFailed('${latest.job_id}')">仅重试失败项</button>`;
   btns += ` <button onclick="confirmJob('${latest.job_id}')">知道了</button>`;
-  const fails = (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('');
+  const fails = act.failures ? (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('') : '';
   card.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:10px 16px;background:var(--bg2,#F7F8FA)">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${head}
       <span style="font-size:11px;color:#888">${latest.started_at||''} · ${latest.type}${latest.with_comments===false?' · 不抓评论':''}</span>
@@ -845,6 +872,15 @@ async function loadJobCard(){
 function toggleFailures(){
   const el = document.getElementById('failList');
   if(el) el.style.display = el.style.display==='none' ? 'block' : 'none';
+}
+async function viewJobLog(jid){
+  try{
+    const j = await (await fetch('/api/jobs/' + jid + '/log')).json();
+    $('logpanel').style.display = 'flex';
+    $('log').textContent = j.ok ? (j.log || '(空)') : (j.error || '(无日志)');
+    $('log').scrollTop = 0;
+    $('logStatus').textContent = '上次任务运行日志';
+  }catch(e){ toast('读取日志失败: ' + e, '#e64545'); }
 }
 async function confirmJob(jid){
   try{ await fetch('/api/jobs/' + jid + '/confirm', {method:'POST'}); }catch(e){}
@@ -932,7 +968,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if u.path == "/api/jobs":
-            self._json({"ok": True, "jobs": load_jobs()[-20:],
+            jobs = load_jobs()[:20]     # load_jobs 已倒序：取最新的 20 条
+            for j in jobs:
+                j["actions"] = compute_card_actions(j)
+            self._json({"ok": True, "jobs": jobs,
                         "running": (JOB.get("record") or {}).get("job_id", "")
                         if JOB.get("status") == "running" else ""})
             return
