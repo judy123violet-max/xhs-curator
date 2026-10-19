@@ -9,6 +9,12 @@
 产出:
     <dest>/<标题>.md                 # 带 frontmatter 的笔记
     <dest>/attachments/<笔记标题>--img_*.jpg  # 原图（wikilink 引用，单层目录）
+
+OCR 价值闸门（2026-10-19）:
+    每篇产物目录可选放 ocr_status.json（逐图 class/action/skip_reason/note），
+    导出按状态驱动：informational=完整OCR去图留文 / ui=留图+一句说明 /
+    decorative=仅留原图 / uncertain=留图+待复核标记；无该文件时退回旧版启发式。
+    --force-ocr 覆盖跳过决定；--ocr-dry-run 只出逐图报告不写文件。
 """
 import argparse
 import difflib
@@ -146,6 +152,24 @@ def load_ocr(folder):
     if cur:
         out[cur] = "\n".join(buf).strip()
     return out
+
+
+def load_ocr_status(folder):
+    """读取 ocr_status.json（OCR 价值闸门 · 逐图状态，OCR 阶段产出）
+    格式: [{"file": "img_01.jpg", "class": "informational|ui|decorative|uncertain",
+            "action": "full_ocr|one_line|skip|pending", "skip_reason": "...", "note": "..."}]
+    文件不存在或损坏 → None（导出退回旧版 has_substantive_text 启发式，向后兼容）"""
+    p = os.path.join(folder, "ocr_status.json")
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [d for d in data if isinstance(d, dict) and (d.get("file") or "").strip()]
+    except Exception:
+        pass
+    return None
 
 
 def load_creator_nick():
@@ -385,6 +409,65 @@ def has_substantive_text(t):
     return len(norm_para(" ".join(rest))) >= 15
 
 
+OCR_CLASSES = ("informational", "ui", "decorative", "uncertain")
+CLASS_ACTION = {"informational": "完整OCR", "ui": "一句说明",
+                "decorative": "跳过OCR", "uncertain": "待复核"}
+
+
+def plan_images(img_files, ocr_map, status_list=None, force_ocr=False):
+    """OCR 价值闸门 · 消费端（2026-10-19 Codex 审计规则，雅旭授权）
+
+    逐图决定「文字怎么用、图留不留」，四种类别（ocr_status.json 驱动）：
+      informational → 完整 OCR：有实质转录 → 去图留文；转录无实质 → 保留图（不丢字）
+      ui            → 保留图 + 一句用途说明（note 字段），不转录 UI 噪声
+      decorative    → 仅保留原图，不输出文字
+      uncertain     → 保留图 + 「待复核」标记，绝不静默丢失
+    status_list=None（无状态文件）→ 退回旧版 has_substantive_text() 启发式，
+    行为与 2026-10-16 版完全一致（向后兼容，老数据不炸）。
+    force_ocr=True → 覆盖闸门的跳过决定：凡有转录文字一律去图留文；
+    无文字的图仍保留原图，绝不伪称已转录。
+
+    返回: [{"file", "text", "keep", "one_line", "pending", "src_class", "skip_reason"}]
+    """
+    status_map = {}
+    if status_list:
+        for s in status_list:
+            fn = os.path.basename((s.get("file") or "").strip())
+            if fn:
+                status_map[fn] = s
+    plan = []
+    prev_raw = ""
+    for fn in img_files:
+        raw_t = (ocr_map.get(fn) or "").strip()
+        t = dedup_ocr(prev_raw, raw_t)      # 相邻图重复段落消重
+        t = filter_photo_captions(t)        # 照片/自拍类图注整段丢弃
+        if raw_t:
+            prev_raw = raw_t
+        st = status_map.get(fn)
+        one_line, reason = "", ""
+        if st:
+            cls = st.get("class") if st.get("class") in OCR_CLASSES else "uncertain"
+            reason = (st.get("skip_reason") or "").strip()
+            if force_ocr:
+                keep = not t                # 有转录就转文字，无转录保留图
+            elif cls == "informational":
+                keep = not has_substantive_text(t)
+            elif cls == "ui":
+                keep, one_line = True, (st.get("note") or "").strip()
+            else:                           # decorative / uncertain
+                keep = True
+                if cls == "decorative":
+                    t = ""                  # 装饰图：仅保留原图，转录文字不输出
+        else:
+            cls = "legacy"                  # 无该图状态 → 旧版启发式
+            keep = not has_substantive_text(t)
+        pending = keep and cls == "uncertain"
+        plan.append({"file": fn, "text": t, "keep": keep,
+                     "one_line": one_line, "pending": pending,
+                     "src_class": cls, "skip_reason": reason})
+    return plan
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dest", required=True)
@@ -398,6 +481,10 @@ def main():
                     help="正文小标题还原方式：hash=### 真标题（默认，可进大纲）；bold=**加粗**")
     ap.add_argument("--frames", action="store_true",
                     help="导出视频关键帧（默认关闭：视频产物 v2 由 AI 结构化整理判断干货）")
+    ap.add_argument("--force-ocr", action="store_true",
+                    help="覆盖 OCR 价值闸门的跳过决定：凡有转录文字的图一律去图留文")
+    ap.add_argument("--ocr-dry-run", action="store_true",
+                    help="只输出逐图「建议OCR/跳过原因」报告，不写任何文件")
     args = ap.parse_args()
     dest = os.path.abspath(args.dest)
     fallback_author = (args.author or load_creator_nick()).strip()
@@ -437,37 +524,51 @@ def main():
         desc = clean_body(desc_raw)   # 清洗后若为空就留空（标签已进 frontmatter）
         desc = boldify_headings(desc, args.heading_style)   # 正文小标题 → 真标题
 
-        # 逐图判定（2026-10-16 雅旭拍板，学 xhs-claude-skills 的逐图粒度）：
-        #   图内是干货长文 → 去图留文（文字已转录，图是冗余）
-        #   图内只有一行说明 / 没文字（界面截图、照片）→ 保留图
-        ocr_map = load_ocr(os.path.join(SRC, d)) if (r.get("images") or []) else {}
-        img_plan = []            # [(文件名, 转录文字, 是否保留图)]
-        prev_ocr = ""
-        for fn in (r.get("images") or []):
-            raw_t = ocr_map.get(fn, "").strip()
-            t = dedup_ocr(prev_ocr, raw_t)      # 相邻图重复段落消重
-            t = filter_photo_captions(t)        # 照片/自拍类图注整段丢弃
-            if raw_t:
-                prev_ocr = raw_t
-            img_plan.append((fn, t, not has_substantive_text(t)))
-        ocr_all = "\n\n".join(t for _, t, _ in img_plan if t)
+        # OCR 价值闸门（2026-10-19）：逐图状态驱动（ocr_status.json），
+        # 无状态文件 → 退回旧版逐图启发式，行为不变
+        folder = os.path.join(SRC, d)
+        images = r.get("images") or []
+        ocr_map = load_ocr(folder) if images else {}
+        status_list = load_ocr_status(folder) if images else None
+        img_plan = plan_images(images, ocr_map, status_list, args.force_ocr)
+
+        if args.ocr_dry_run:
+            src_tag = "ocr_status.json" if status_list is not None else "旧版启发式（无状态文件）"
+            log(f"  · {d}  [{ntype}，{len(img_plan)} 图，判定来源: {src_tag}]")
+            for it in img_plan:
+                if status_list is not None and it["src_class"] != "legacy":
+                    act = CLASS_ACTION[it["src_class"]]
+                    if it["src_class"] == "informational":
+                        act += "→去图留文" if not it["keep"] else "→转录无实质，保留图"
+                    extra = f"，{it['skip_reason']}" if it["skip_reason"] else ""
+                elif it["text"]:
+                    act = "完整OCR→去图留文" if not it["keep"] else "完整OCR→转录无实质，保留图"
+                    extra = ""
+                else:
+                    act = "未转录→建议补OCR（人工复核）"
+                    extra = ""
+                log(f"      {it['file']}  {act}{extra}")
+            log("")
+            continue
+
+        ocr_all = "\n\n".join(it["text"] for it in img_plan if it["text"])
         desc_body = analyze_image_note(desc, ocr_all)   # 正文与图内文字去重
-        text_only = bool(img_plan) and not any(k for _, _, k in img_plan)
+        text_only = bool(img_plan) and not any(it["keep"] for it in img_plan)
 
         # 附件（2026-10-16 契约）：单层 attachments/，文件名 <笔记标题>--<原名>，
         # 重跑幂等（存在且大小一致跳过 + 清理本篇过期附件走回收站）
         md_stem = safe(title)              # 与笔记文件同名（无扩展名），附件前缀
         used_atts = set()                  # 本篇产出的附件目标名（用于幂等清理）
         img_files = []                     # 原文件名列表（引用时拼 <md_stem>--<fn>）
-        for fn, _t, keep in img_plan:
-            if not keep:
+        for it in img_plan:
+            if not it["keep"]:
                 continue
-            sp = os.path.join(SRC, d, fn)
+            sp = os.path.join(SRC, d, it["file"])
             if os.path.exists(sp):
-                dst_name = f"{md_stem}--{fn}"
+                dst_name = f"{md_stem}--{it['file']}"
                 copy_attachment(sp, os.path.join(att_root, dst_name))
                 used_atts.add(dst_name)
-                img_files.append(fn)
+                img_files.append(it["file"])
 
         # 视频字幕/关键帧（摊平进 attachments/，不再建子目录）
         sub_rel = ""
@@ -566,7 +667,7 @@ def main():
             L.append("")
 
         if img_plan:
-            any_text = any(t for _, t, _ in img_plan)
+            any_text = any(it["text"] for it in img_plan)
             if text_only:
                 head = "## 图片文字转录"
             else:
@@ -576,13 +677,20 @@ def main():
             if text_only:
                 L.append("> 原笔记内容以图片呈现，以下为图片文字转录；图片未入库。")
                 L.append("")
-            for fn, t, keep in img_plan:
-                if keep:
-                    L.append(f"![[{md_stem}--{fn}{prev_params.get(fn, '')}]]")
-                if t:
+            for it in img_plan:
+                if it["keep"]:
+                    L.append(f"![[{md_stem}--{it['file']}{prev_params.get(it['file'], '')}]]")
+                if it["one_line"]:
                     L.append("")
-                    L.append(t)
-                if keep or t:
+                    L.append(f"（{it['one_line']}）")
+                if it["text"]:
+                    L.append("")
+                    L.append(it["text"])
+                if it["pending"]:
+                    L.append("")
+                    reason = it["skip_reason"] or "图片类型待确认"
+                    L.append(f"> [!note] 待复核：此图未转录（{reason}），如有需要可手动补录。")
+                if it["keep"] or it["text"] or it["one_line"] or it["pending"]:
                     L.append("")
 
         if sub_rel:
