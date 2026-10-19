@@ -63,7 +63,7 @@ class OcrGatePlanTest(unittest.TestCase):
         self.assertEqual(plan[0]["text"], "")
 
     def test_uncertain_marks_pending_never_silent(self):
-        """无法判定 → 保留图 + 待复核标记，绝不静默丢失"""
+        """无法判定 → 保留原图；pending 仅作内部状态，不渲染 callout（雅旭 2026-10-19 决议）"""
         plan = mod.plan_images(["img_01.jpg"], {"img_01.jpg": ""},
                                [_status("img_01.jpg", "uncertain", "待复核")])
         self.assertTrue(plan[0]["keep"])

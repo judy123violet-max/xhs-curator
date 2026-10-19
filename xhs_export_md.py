@@ -420,8 +420,9 @@ def plan_images(img_files, ocr_map, status_list=None, force_ocr=False):
     逐图决定「文字怎么用、图留不留」，四种类别（ocr_status.json 驱动）：
       informational → 完整 OCR：有实质转录 → 去图留文；转录无实质 → 保留图（不丢字）
       ui            → 保留图 + 一句用途说明（note 字段），不转录 UI 噪声
+                      （2026-10-19 雅旭确认：配文属既有行为，此处仅落契约可追溯）
       decorative    → 仅保留原图，不输出文字
-      uncertain     → 保留图 + 「待复核」标记，绝不静默丢失
+      uncertain     → 保留原图，不加任何标记（2026-10-19 雅旭决议：取消待复核 callout）
     status_list=None（无状态文件）→ 退回旧版 has_substantive_text() 启发式，
     行为与 2026-10-16 版完全一致（向后兼容，老数据不炸）。
     force_ocr=True → 覆盖闸门的跳过决定：凡有转录文字一律去图留文；
@@ -686,11 +687,8 @@ def main():
                 if it["text"]:
                     L.append("")
                     L.append(it["text"])
-                if it["pending"]:
-                    L.append("")
-                    reason = it["skip_reason"] or "图片类型待确认"
-                    L.append(f"> [!note] 待复核：此图未转录（{reason}），如有需要可手动补录。")
-                if it["keep"] or it["text"] or it["one_line"] or it["pending"]:
+                # uncertain：仅保留原图，不输出标记（雅旭 2026-10-19 决议）
+                if it["keep"] or it["text"] or it["one_line"]:
                     L.append("")
 
         if sub_rel:
