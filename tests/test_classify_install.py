@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import fetch_xhs_note as fa         # noqa: E402
 import install as installer         # noqa: E402
+import xhs_picker_server as srv     # noqa: E402
 
 
 class ClassifyLinkTest(unittest.TestCase):
@@ -234,6 +235,53 @@ class DefaultSkillDirTest(unittest.TestCase):
         for agent in ("WorkBuddy", "Codex", "Claude Code", "Cursor"):
             self.assertIn(agent, out)
             self.assertIn("--skill-dir", out)
+
+
+class LoadJobsExclusionTest(unittest.TestCase):
+    """复验 P0-5：stats.json 不得被误读成任务记录（现场缺陷回归）"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        srv.JOBS_DIR = os.path.join(self._tmp.name, "jobs")
+        os.makedirs(srv.JOBS_DIR)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_stats_json_and_broken_json_excluded(self):
+        rec = srv.new_job_record("fetch", selected=3)
+        rec["status"] = "done"
+        rec["stats"] = {"planned": 3, "ok": 3, "failed": 0, "skipped": 0,
+                        "failures": []}
+        rec["confirmed"] = False
+        srv.save_job(rec)
+        jid = rec["job_id"]
+        # 同任务的附属文件：stats.json + 日志
+        with open(os.path.join(srv.JOBS_DIR, jid + ".stats.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"planned": 3, "ok": 3, "failed": 0, "skipped": 0}, f)
+        with open(os.path.join(srv.JOBS_DIR, jid + ".log"), "w", encoding="utf-8") as f:
+            f.write("log")
+        # schema 不完整的杂乱 json（无 job_id/status）
+        with open(os.path.join(srv.JOBS_DIR, "zz-broken.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"planned": 1, "ok": 1}, f)
+
+        jobs = srv.load_jobs()
+        self.assertEqual(len(jobs), 1)                       # 只有主记录一条
+        self.assertEqual(jobs[0]["job_id"], jid)
+        self.assertEqual(jobs[0]["status"], "done")
+        self.assertEqual(jobs[0]["stats"]["ok"], 3)          # 完整记录带统计
+
+    def test_done_record_card_actions(self):
+        rec = srv.new_job_record("fetch", selected=1)
+        rec["status"] = "done"
+        rec["stats"] = {"planned": 1, "ok": 1, "failed": 0, "skipped": 0,
+                        "failures": []}
+        a = srv.compute_card_actions(rec)
+        self.assertTrue(a["view_notes"])
+        self.assertTrue(a["continue_flow"])                  # 成功卡给继续整理入口
+        self.assertFalse(a["retry"])                         # 成功无重试
 
 
 if __name__ == "__main__":

@@ -70,17 +70,25 @@ def save_job(rec):
 
 
 def load_jobs():
-    """最近任务记录（倒序）。数据源是文件——服务重启后仍可追溯"""
+    """最近任务记录（倒序）。数据源是文件——服务重启后仍可追溯。
+    2026-10-21 复验 P0-5：只读主任务记录 <job_id>.json，明确排除
+    <job_id>.stats.json 等附属文件；且必须 schema 完整（有 job_id+status）
+    才返回，防止附属文件被误渲染成假失败卡。"""
     out = []
     d = jobs_dir()
     if os.path.isdir(d):
         for fn in sorted(os.listdir(d), reverse=True):
-            if fn.endswith(".json"):
-                try:
-                    with open(os.path.join(d, fn), encoding="utf-8") as f:
-                        out.append(json.load(f))
-                except Exception:
-                    continue
+            if not fn.endswith(".json") or fn.endswith(".stats.json"):
+                continue
+            try:
+                with open(os.path.join(d, fn), encoding="utf-8") as f:
+                    rec = json.load(f)
+            except Exception:
+                continue
+            if not isinstance(rec, dict) or not rec.get("job_id") \
+                    or not rec.get("status"):
+                continue   # schema 不完整 = 不是任务记录
+            out.append(rec)
     return out
 
 
@@ -107,6 +115,7 @@ def compute_card_actions(rec):
     failed_ids = extract_failed_ids(rec)
     status = rec.get("status")
     return {"view_notes": status == "done",
+            "continue_flow": status == "done",
             "retry": status in ("partial", "failed") and bool(failed_ids),
             "failures": status in ("partial", "failed") and bool(failed_ids),
             "log": status == "failed"}
@@ -865,6 +874,7 @@ async function loadJobCard(){
   if(latest.status === 'done'){
     head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
     if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
+    if(act.continue_flow) btns += ` <button class="primary" onclick="continueFlow('${latest.job_id}')">继续整理（OCR + 导出）</button>`;
   }else if(latest.status === 'partial'){
     head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
   }else{
@@ -899,6 +909,13 @@ async function viewJobLog(jid){
     $('log').scrollTop = 0;
     $('logStatus').textContent = '上次任务运行日志';
   }catch(e){ toast('读取日志失败: ' + e, '#e64545'); }
+}
+async function continueFlow(jid){
+  const guide = '请把刚才抓取的笔记继续整理入库：逐图 OCR 价值判定后，运行 xhs_export_md.py 导出到我的 Obsidian 库（任务 ' + jid + '）';
+  let copied = false;
+  try{ await navigator.clipboard.writeText(guide); copied = true; }catch(e){}
+  toast(copied ? '引导语已复制——粘贴到 Agent 对话发送即可继续整理入库'
+               : '请回到 Agent 对话说：「' + guide + '」', 'var(--teal)');
 }
 async function confirmJob(jid){
   try{ await fetch('/api/jobs/' + jid + '/confirm', {method:'POST'}); }catch(e){}
