@@ -114,7 +114,11 @@ class InstallFlowTest(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(dest, "scripts")))
         marker = os.path.join(dest, installer.MARKER_NAME)
         with open(marker, encoding="utf-8") as f:
-            self.assertEqual(f.read().strip(), self.repo)   # marker = 仓库绝对路径
+            m = json.load(f)                                # JSON: 仓库路径+解释器
+        self.assertEqual(m["repo_root"], self.repo)
+        self.assertTrue(os.path.exists(m["python"]))        # 记录的解释器真实存在
+        root, py = installer.read_marker(dest)
+        self.assertEqual((root, py), (self.repo, m["python"]))
 
     def test_marker_verification_pass_and_fail(self):
         self._install()
@@ -154,11 +158,14 @@ class InstallFlowTest(unittest.TestCase):
         # ① 环境变量优先
         os.environ["XHS_CURATOR_HOME"] = self.repo
         try:
-            self.assertEqual(installer.resolve_repo_root(dest), self.repo)
+            root, _py = installer.resolve_repo_root(dest)
+            self.assertEqual(root, self.repo)
         finally:
             del os.environ["XHS_CURATOR_HOME"]
-        # ② marker
-        self.assertEqual(installer.resolve_repo_root(dest), self.repo)
+        # ② marker（返回元组：root + 记录的解释器）
+        root, py = installer.resolve_repo_root(dest)
+        self.assertEqual(root, self.repo)
+        self.assertTrue(os.path.exists(py))
         # ④ 全部失败 → None
         empty = os.path.join(self._tmp.name, "empty_skill")
         os.makedirs(empty)

@@ -24,6 +24,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 
@@ -79,45 +80,61 @@ def find_spec(mod):
     return importlib.util.find_spec(mod) is not None
 
 
-def dependency_report(with_deps=False):
-    """依赖检测：缺什么报什么，附可操作命令；with_deps=True 时自动 pip 安装"""
+def _module_exists(python_exe, mod):
+    """探测指定解释器里模块是否可导入（2026-10-20 实测教训：
+    依赖装在哪个解释器、脚本就得用哪个解释器跑）"""
+    r = subprocess.run([python_exe, "-c", f"import {mod}"],
+                       capture_output=True)
+    return r.returncode == 0
+
+
+def dependency_report(with_deps=False, python_exe=None):
+    """依赖检测：针对指定解释器（默认=运行安装器的解释器）；
+    缺什么报什么并附可操作命令——装依赖必须装给「跑脚本的那个解释器」"""
+    python_exe = python_exe or sys.executable
     lines, need_pip = [], []
-    if sys.version_info < (3, 10):
-        lines.append("[X] Python 需要 3.10+，当前 " + sys.version.split()[0])
-    if find_spec("curl_cffi"):
-        lines.append("[√] curl_cffi 已安装（单篇匿名抓取）")
-    else:
-        need_pip.append("curl_cffi>=0.16.3")
-        lines.append("[!] curl_cffi 未安装（单篇匿名抓取必需）")
-    if find_spec("playwright"):
-        lines.append("[√] playwright 已安装（主页批量采集）")
-    else:
-        need_pip.append("playwright>=1.40.0")
-        lines.append("[!] playwright 未安装（主页批量采集必需）")
+    ver = subprocess.run([python_exe, "-c",
+                          "import sys;print('%d.%d' % sys.version_info[:2])"],
+                         capture_output=True, text=True)
+    ver_str = (ver.stdout or "").strip() or "?"
+    try:
+        major, minor = int(ver_str.split(".")[0]), int(ver_str.split(".")[1])
+        if (major, minor) < (3, 10):
+            lines.append(f"[X] Python 需要 3.10+，当前 {ver_str}: {python_exe}")
+    except Exception:
+        lines.append(f"[!] 无法探测解释器版本: {python_exe}")
+    for mod, desc, req in (("curl_cffi", "单篇匿名抓取", "curl_cffi>=0.16.3"),
+                           ("playwright", "主页批量采集", "playwright>=1.40.0")):
+        if _module_exists(python_exe, mod):
+            lines.append(f"[√] {mod} 已安装（{desc}）")
+        else:
+            need_pip.append(req)
+            lines.append(f"[!] {mod} 未安装（{desc}）——解释器: {python_exe}")
     chrome_ok = any(os.path.exists(p) for p in (
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C://Program Files//Google//Chrome//Application//chrome.exe",
+        r"C://Program Files (x86)//Google//Chrome//Application//chrome.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")))
     lines.append(("[√] 已检测到本机 Chrome（登录态批量采集用）" if chrome_ok
                   else "[!] 未检测到 Chrome——主页批量采集需要本机安装 Chrome"))
-    if not find_spec("faster_whisper"):
-        lines.append("[i] faster-whisper 未安装（可选：无字幕视频的本地转写，"
-                     "需要时再装：pip install \"faster-whisper>=1.0.0\" \"av<15\"）")
-    else:
+    if _module_exists(python_exe, "faster_whisper"):
         lines.append("[√] faster-whisper 已安装（无字幕视频本地转写）")
+    else:
+        lines.append("[i] faster-whisper 未安装（可选：无字幕视频的本地转写，"
+                     '需要时再装：pip install "faster-whisper>=1.0.0" "av<15"）')
     if need_pip:
-        cmd = f'pip install {" ".join(need_pip)}'
-        lines.append(("[√] 已自动安装: " + " ".join(need_pip)) if with_deps else
-                     f"[!] 请执行依赖安装:\n    {cmd}")
+        cmd = f'"{python_exe}" -m pip install {" ".join(need_pip)}'
         if with_deps:
-            import subprocess
-            subprocess.run([sys.executable, "-m", "pip", "install", *need_pip],
-                           check=True)
+            subprocess.run([python_exe, "-m", "pip", "install", *need_pip], check=True)
+            lines.append("[√] 已自动安装: " + " ".join(need_pip))
+        else:
+            lines.append(f"[!] 请执行依赖安装（装给运行脚本的那个解释器）:\n    {cmd}")
+    return lines
     return lines
 
 
-def install(repo_root, skill_dir):
+def install(repo_root, skill_dir, python_exe=None):
     repo_root = os.path.abspath(repo_root)
+    python_exe = os.path.abspath(python_exe or sys.executable)
     missing = check_repo(repo_root)
     if missing:
         print("[X] 仓库不完整，缺少以下文件（请重新 git clone，不要手工裁剪）:")
@@ -137,7 +154,8 @@ def install(repo_root, skill_dir):
             shutil.copy2(os.path.join(root, fn), os.path.join(target_root, fn))
             n += 1
     with open(os.path.join(dest, MARKER_NAME), "w", encoding="utf-8") as f:
-        f.write(repo_root)
+        json.dump({"repo_root": repo_root, "python": python_exe}, f,
+                  ensure_ascii=False, indent=2)
     ok, detail = verify_marker(dest)
     print(f"[√] 已安装 {n} 个文件 → {dest}")
     print(f"    Skill 名称: xhs-curator | 仓库: {repo_root}")
@@ -145,13 +163,28 @@ def install(repo_root, skill_dir):
     return ok
 
 
-def verify_marker(skill_dir):
-    """marker 校验：指向的仓库必须存在且必要脚本齐全；失效给可执行修复提示"""
+def read_marker(skill_dir):
+    """读 marker：新版 JSON {repo_root, python}；旧版纯文本（仅仓库路径）"""
     marker = os.path.join(skill_dir, MARKER_NAME)
     if not os.path.exists(marker):
-        return False, f"marker 缺失——请重新运行 install.py（仓库: {BASE}）"
+        return None
     with open(marker, encoding="utf-8") as f:
-        root = f.read().strip()
+        raw = f.read().strip()
+    if raw.startswith("{"):
+        try:
+            d = json.loads(raw)
+            return d.get("repo_root", ""), d.get("python") or ""
+        except Exception:
+            return None
+    return raw, ""  # 旧版纯文本
+
+
+def verify_marker(skill_dir):
+    """marker 校验：指向的仓库必须存在且必要脚本齐全；失效给可执行修复提示"""
+    got = read_marker(skill_dir)
+    if got is None:
+        return False, f"marker 缺失——请重新运行 install.py（仓库: {BASE}）"
+    root, python_exe = got
     if not os.path.isdir(root):
         return False, (f"marker 指向的仓库不存在: {root}\n"
                        f"    修复: 仓库移动/删除后，重新运行 install.py 即可更新")
@@ -159,25 +192,29 @@ def verify_marker(skill_dir):
     if missing:
         return False, (f"marker 指向的仓库不完整，缺: {missing}\n"
                        f"    修复: 重新运行 install.py 或重新 git clone")
-    return True, f"仓库有效: {root}"
+    detail = f"仓库有效: {root}"
+    if python_exe and not os.path.exists(python_exe):
+        detail += (f"\n    ⚠ marker 记录的解释器已不存在: {python_exe}\n"
+                   f"    修复: 重新运行 install.py（会用当前解释器更新记录）")
+    return True, detail
 
 
 def resolve_repo_root(skill_dir):
-    """Skill 运行时定位仓库根：环境变量 → marker（校验）→ 向上探测 → None"""
+    """Skill 运行时定位仓库根：返回 (root, python_exe) 或 None。
+    环境变量 → marker（含记录的解释器）→ 向上探测。"""
     env = os.environ.get("XHS_CURATOR_HOME")
     if env and os.path.exists(os.path.join(env, "xhs_export_md.py")):
-        return env
+        return env, sys.executable
     d = os.path.abspath(skill_dir)
     while True:
         marker = os.path.join(d, MARKER_NAME)
         if os.path.exists(marker):
-            try:
-                with open(marker, encoding="utf-8") as f:
-                    root = f.read().strip()
+            got = read_marker(d)
+            if got:
+                root, python_exe = got
                 if root and os.path.exists(os.path.join(root, "xhs_export_md.py")):
-                    return root
-            except Exception:
-                pass
+                    return root, (python_exe if python_exe and os.path.exists(python_exe)
+                                  else sys.executable)
         parent = os.path.dirname(d)
         if parent == d:
             return None
@@ -195,13 +232,16 @@ if __name__ == "__main__":
                     help="只校验已安装 Skill 的 marker，不安装")
     ap.add_argument("--with-deps", action="store_true",
                     help="检测到缺依赖时自动 pip 安装（默认只提示命令）")
+    ap.add_argument("--python", default=sys.executable,
+                    help="记录到 marker 的 Python 解释器（运行脚本用它，"
+                         "依赖也装给它；默认=运行本安装器的解释器）")
     a = ap.parse_args()
     print("===== xhs-curator 安装器 =====")
     if not a.skill_dir:
         print_agent_dirs()
         sys.exit(1)
     print(f"  技能目录: {a.skill_dir}")
-    deps = dependency_report(a.with_deps)
+    deps = dependency_report(a.with_deps, a.python)
     for ln in deps:
         print("  " + ln)
     if a.verify:
