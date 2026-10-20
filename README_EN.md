@@ -137,6 +137,9 @@ cd xhs-curator
 python install.py        # copies the Skill into your Agent skills dir + writes a repo marker + checks dependencies
 ```
 
+Skill-dir auto-detection: an **existing** skills directory for WorkBuddy / Codex / Claude Code / Cursor is picked automatically;
+if none is found the installer lists each Agent's `--skill-dir` command for you to choose explicitly (no guessing).
+
 > ⚠️ Copying only the `skill/` directory into your skills folder **supports single-note reading only** (anonymous single links to Markdown) and **cannot drive profile batch collection** — batch relies on the full toolchain at the repository root.
 
 ### ⚡ One-liner install (if you'd rather not touch a terminal)

@@ -39,10 +39,34 @@ SINGLE_SCRIPTS = ["skill/scripts/fetch_xhs_note.py",
 REQUIRED = BATCH_SCRIPTS + SINGLE_SCRIPTS
 
 
+AGENT_SKILL_DIRS = {
+    "WorkBuddy": (".workbuddy", "skills"),
+    "Codex": (".codex", "skills"),
+    "Claude Code": (".claude", "skills"),
+    "Cursor": (".cursor", "skills"),
+}
+
+
+def agent_skill_dirs():
+    """各 Agent 技能目录（调用时展开 ~，便于测试重定向 HOME）"""
+    return {name: os.path.join(os.path.expanduser("~"), *parts)
+            for name, parts in AGENT_SKILL_DIRS.items()}
+
+
 def default_skill_dir():
-    """默认 Agent 技能目录：明确、可识别（不静默写不透明位置）"""
-    home = os.path.expanduser("~")
-    return os.path.join(home, ".workbuddy", "skills")
+    """仅在能可靠识别当前 Agent 技能目录时自动选择（目录已存在才算可靠）；
+    识别不了返回 None——由调用方打印各 Agent 的明确命令并退出，绝不猜测。"""
+    for name, d in agent_skill_dirs().items():
+        if os.path.isdir(d):
+            return d
+    return None
+
+
+def print_agent_dirs():
+    print("[X] 无法自动识别你的 Agent 技能目录——请显式指定，例如：")
+    for name, d in agent_skill_dirs().items():
+        print(f'    {name}:  python install.py --skill-dir "{d}"')
+    print("    其他 Agent: python install.py --skill-dir <你的技能目录>")
 
 
 def check_repo(repo_root):
@@ -163,7 +187,8 @@ def resolve_repo_root(skill_dir):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--skill-dir", default=default_skill_dir(),
-                    help="Agent 技能目录（默认 ~/.workbuddy/skills）")
+                    help="Agent 技能目录；能可靠识别时自动选择（WorkBuddy/Codex/"
+                         "Claude Code/Cursor 已存在的目录），否则必须显式指定")
     ap.add_argument("--repo-root", default=BASE,
                     help="仓库根目录（默认=本脚本所在目录）")
     ap.add_argument("--verify", action="store_true",
@@ -172,6 +197,10 @@ if __name__ == "__main__":
                     help="检测到缺依赖时自动 pip 安装（默认只提示命令）")
     a = ap.parse_args()
     print("===== xhs-curator 安装器 =====")
+    if not a.skill_dir:
+        print_agent_dirs()
+        sys.exit(1)
+    print(f"  技能目录: {a.skill_dir}")
     deps = dependency_report(a.with_deps)
     for ln in deps:
         print("  " + ln)

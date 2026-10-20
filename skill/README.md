@@ -19,7 +19,14 @@
 
 ## 安装
 
-把本目录复制到你所用 Agent 的 skills 目录（例如 Codex 的 `~/.codex/skills/xhs-note-reader/`），或在仓库内直接调用脚本。
+**标准安装（完整功能）** = 克隆 xhs-curator 仓库 → 在仓库根运行 `python install.py`
+（详见仓库 README 的「标准安装」一节；`--skill-dir` 可显式指定你所用 Agent 的技能目录，
+未指定时若能可靠识别会自动选择，识别不了会列出各 Agent 的目录让你选）。
+
+**受限安装（仅单篇速读）**：只把本目录复制到你所用 Agent 的技能目录
+（目录名 `xhs-curator`），例如 Codex 的 `~/.codex/skills/xhs-curator/`。
+⚠️ 这种方式**只支持单篇速读**（匿名单篇链接 → Markdown），
+**不能用于主页批量采集**——批量能力依赖仓库根目录的完整工具链。
 
 依赖：
 

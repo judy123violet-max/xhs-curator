@@ -165,5 +165,42 @@ class InstallFlowTest(unittest.TestCase):
         self.assertIsNone(installer.resolve_repo_root(empty))
 
 
+class DefaultSkillDirTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = os.path.join(self._tmp.name, "home")
+        self._orig = os.environ.get("USERPROFILE"), os.environ.get("HOME")
+
+    def tearDown(self):
+        os.environ["USERPROFILE"], os.environ["HOME"] = self._orig
+        self._tmp.cleanup()
+
+    def _set_home(self):
+        os.environ["USERPROFILE"] = self.home
+        os.environ["HOME"] = self.home
+
+    def test_reliable_autodetect_when_dir_exists(self):
+        """已存在的 WorkBuddy 技能目录 → 自动选择（可靠识别）"""
+        self._set_home()
+        os.makedirs(os.path.join(self.home, ".workbuddy", "skills"))
+        self.assertEqual(installer.default_skill_dir(),
+                         os.path.join(self.home, ".workbuddy", "skills"))
+
+    def test_unknown_agent_lists_commands_and_returns_none(self):
+        """识别不了 → None（绝不猜测），print_agent_dirs 列出各 Agent 命令"""
+        self._set_home()
+        self.assertIsNone(installer.default_skill_dir())
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            installer.print_agent_dirs()
+        out = buf.getvalue()
+        self.assertIn("无法自动识别", out)
+        for agent in ("WorkBuddy", "Codex", "Claude Code", "Cursor"):
+            self.assertIn(agent, out)
+            self.assertIn("--skill-dir", out)
+
+
 if __name__ == "__main__":
     unittest.main()

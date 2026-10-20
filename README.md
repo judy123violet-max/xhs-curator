@@ -86,6 +86,9 @@ cd xhs-curator
 python install.py        # 复制 Skill 到 Agent 技能目录 + 写入仓库位置标记 + 依赖检测
 ```
 
+技能目录自动识别：WorkBuddy / Codex / Claude Code / Cursor 中**已存在**的技能目录会被自动选中；
+都没有时安装器会列出各 Agent 的 `--skill-dir` 命令让你显式指定（不猜测）。
+
 > ⚠️ 只把 `skill/` 目录单独复制到技能目录的安装方式**只支持单篇速读**（匿名单篇链接转 Markdown），**不能用于主页批量采集**——批量能力依赖仓库根目录的完整工具链。
 
 ### ⚡ 懒人安装（推荐给不想碰终端的人）
