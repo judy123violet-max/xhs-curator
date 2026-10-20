@@ -416,6 +416,47 @@ def download_images(urls, outdir):
     return paths
 
 
+def classify_link(text, resolver=None):
+    """链接分类器（2026-10-20 P0：统一入口硬路由，AI 只执行分类结果不猜）。
+
+    先从文本提取 URL，短链先 resolve 再按 URL 形态判定：
+      single   /explore/{id}、/discovery/item/{id}、/item/{id}
+      profile  /user/profile/{user_id}（手机端主页分享文字靠 resolve 后形态判定）
+      invalid  非 xiaohongshu 域 / 无链接
+      unknown  短链解析暂不可达（诚实态：绝不把有效主页链接说成无效）
+    resolver 参数便于测试注入，不联网。
+    """
+    resolver = resolver or resolve_url
+    urls = re.findall(r"https?://[^\s，。；！？、\"'（）【】《》<>]+", text or "")
+    if not urls:
+        return {"link_type": "invalid", "resolved_url": "", "note_id": "",
+                "reason": "输入中未找到链接"}
+    last_error = ""
+    for u in urls:
+        resolved = u
+        if "xhslink." in u:
+            try:
+                resolved = resolver(u)
+            except Exception as e:
+                last_error = f"短链解析暂不可达: {e}"
+                continue
+        host = urllib.parse.urlparse(resolved).netloc.lower()
+        if "xiaohongshu.com" not in host:
+            continue
+        if re.search(r"/user/profile/[0-9A-Za-z]+", resolved):
+            return {"link_type": "profile", "resolved_url": resolved,
+                    "note_id": ""}
+        m = re.search(r"/(?:discovery/item|explore|item)/([0-9a-f]{24})", resolved)
+        if m:
+            return {"link_type": "single", "resolved_url": resolved,
+                    "note_id": m.group(1)}
+    if last_error:
+        return {"link_type": "unknown", "resolved_url": "", "note_id": "",
+                "reason": last_error + "（请稍后重试或发送完整链接）"}
+    return {"link_type": "invalid", "resolved_url": "", "note_id": "",
+            "reason": "链接不属于小红书（xiaohongshu.com）"}
+
+
 def safe_stem(s, maxlen=60):
     """标题 → 文件名安全子串"""
     s = re.sub(r'[\\/:*?"<>|\r\n\t]', "", s or "").strip()
@@ -512,6 +553,10 @@ def main():
         print(__doc__)
         sys.exit(1)
     link = sys.argv[1]
+    if "--classify" in sys.argv:
+        # 统一入口硬路由（2026-10-20 P0）：AI 先跑分类拿 link_type，再按类型路由
+        print(json.dumps(classify_link(link), ensure_ascii=False))
+        return
     outdir = sys.argv[2] if len(sys.argv) > 2 else "xhs_note"
     os.makedirs(outdir, exist_ok=True)
     imgdir = os.path.join(outdir, "imgs")

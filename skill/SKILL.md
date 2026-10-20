@@ -1,12 +1,39 @@
 ---
-name: xhs-note-reader
-displayName: xhs-curator · 单篇速读（小红书链接转 Markdown，匿名免登录）
-description: 把小红书分享短链（xhslink.cn）或 explore 链接里的图文笔记，提取原图、多模态识别全部文字、并整理成结构化的 markdown 文档（含摘要/章节/Q&A/关键词）；也覆盖"抓某个博主主页的全部笔记"（整号列表 + 勾选下载）。当用户给一个 xiaohongshu.com / xhslink.cn 链接、或博主主页链接，并要求"整理笔记/抓图片/导出文档/抓这个号所有笔记/复盘面经"时使用。**核心抓取思路：不要走 JS 渲染或登录态，直接请求服务端渲染的 HTML 拿高清无水印原图 URL（⚠️ 页面结构 2026-10-16 已变：老 `noteDetailMap` + `urlDefault` → 新 `note.data.noteData` + `imageList[].url`，脚本已双兼容），再下载 + 多模态识别；整号抓取则读 SPA store 的 `_rawValue`。**
+name: xhs-curator
+displayName: xhs-curator · 小红书笔记采集与 Obsidian 入库（单篇速读 + 博主主页批量）
+description: 小红书笔记采集与知识库入库一站式工具（xhs-curator）。覆盖三种入口——①单篇笔记链接（xhslink.cn 短链 / explore 链接）：匿名免登录直接产出 Markdown 文稿（正文/原图/字幕/转写）；②博主主页链接（含手机端 App 分享的主页文本）：弹出登录态工作台，勾选批量抓取，可带博主评论；③关键词搜索发现笔记。抓完支持"导入 Obsidian"入库（frontmatter/附件/索引）。当用户给一个 xiaohongshu.com / xhslink.cn 链接或博主主页链接、发来手机端分享文字、要求"整理笔记/抓图片/导出文档/抓这个号所有笔记/批量采集/复盘面经/导入 Obsidian"时使用。
 ---
 
-# 小红书图文笔记 → 结构化文档（单篇 Skill · 引擎 A）
+# 小红书图文笔记 → 结构化文档（xhs-curator 统一入口）
 
-> 本 Skill 位于 xhs-curator 仓库的 `skill/` 目录；下文 `../` 指仓库根目录。
+> **安装形态（2026-10-20 P0 定稿）**：本 Skill 必须与 xhs-curator 仓库配套安装——
+> 标准安装 = `git clone` 本仓库 → 运行 `python install.py`（自动复制本 Skill 到
+> Agent 技能目录并写入仓库位置标记）。**仅复制 skill/ 目录**的安装只支持单篇速读，
+> 不能用于主页批量采集。
+
+## 🧭 仓库根定位与统一入口路由（2026-10-20 P0：硬判定，不靠模型猜测）
+
+**第一步 · 定位仓库根**（按优先级，找到即止）：
+1. 环境变量 `XHS_CURATOR_HOME`（指向含 xhs_export_md.py 的仓库根）
+2. 本 Skill 目录下的 `.xhs-curator-root` marker 文件（install.py 写入仓库绝对路径）
+3. 向上逐级探测（开发场景：本 Skill 就在仓库里）
+4. 全部失败 → **输出安装引导**（见下方固定话术），不得臆测路径
+
+**第二步 · 链接分类**（对用户发来的链接/分享文字，必跑）：
+```
+python <仓库根>/skill/scripts/fetch_xhs_note.py --classify "<原文>"
+```
+输出 JSON `link_type: single | profile | invalid | unknown`——**AI 按此结果路由，禁止按文字内容猜测**：
+- `single` → 引擎 A 匿名快读（单篇 .md 交付）
+- `profile` → 引擎 B 登录态工作台（有效链接！需要登录态，不是无效链接）
+- `invalid` → 如实说明无法识别，请重新分享
+- `unknown` → 短链解析暂不可达，如实说明请稍后重试
+
+**安装引导固定话术**（仓库根定位失败时输出）：
+> 你发的是博主主页链接，批量采集需要完整安装 xhs-curator（一次性，约 2 分钟）：
+> 1. `git clone https://github.com/judy123violet-max/xhs-curator.git`
+> 2. `cd xhs-curator && python install.py`
+> 3. 重启对话后再发一次主页链接即可
 
 ## 🎯 交互原则（2026-10-16 确认：说了就执行，没说就问）
 
@@ -52,7 +79,7 @@ AI 行为准则：用户的 key **只写入本地配置文件**（如 `~/.dashsc
 7. **博主评论筛选**（2026-10-16 拍板）：评论和图片一样分「有用 / 装饰」——`is_meaningful_comment()`：归一化 **≥20 字**或**点赞 ≥10** → 保留；寒暄短评（"往我心里埋来""想你了宝宝[doge]"）、纯表情 → 丢弃；全部被筛掉则**不输出评论章节**。被过滤的评论仍留在 raw.json，调规则重导可找回。
 8. **勾选主权（2026-10-19 拍板，批量场景铁律）**：主页/搜索批量的**勾选永远是用户的动作**——AI 只负责把列表抓回来、把工作台开给用户，**等用户勾完再跑**。**严禁**代替用户编辑 `selection.json`、代挑笔记、或跳过勾选直接运行 `xhs_fetch_selected.py` 批量模式——**即使用户说"测试/先跑通看看"也不例外**（测试可以只抓列表，不能代勾选抓正文）。违反即等同"交互没说就问"铁律的反向越权：AI 替用户做了决策。
 
-工具：`../xhs_export_md.py`（`--dest <你的 Obsidian 库目录>`）。
+工具：`<仓库根>/xhs_export_md.py`（`--dest <你的 Obsidian 库目录>`；仓库根定位见上方「仓库根定位与统一入口路由」）。
 
 **md 结构（每篇一个文件，文件名=清洗后的标题）**：
 
@@ -170,7 +197,7 @@ tags:
 
 ## 🎬 视频笔记专用路径（2026-10-12 实战验证，优先检查）
 
-> **⚡ 视频转写能力（2026-10-16 晚已上线，基础版）**：视频笔记双层兜底——**官方字幕优先**（平台只给部分视频生成，实测约 2/3 有），**无字幕 → 自动下载视频 + 本地 faster-whisper 语音转写**（`transcript.txt`，按语义段分行；转写完视频即删）。参数：`--whisper-model`（默认 small，base 同音字误差明显如"流暖戏"=浏览器）、`--no-asr` 跳过。模型在 `../models/faster-whisper-<name>/`，首次自动从 hf-mirror 逐文件流式下载。
+> **⚡ 视频转写能力（2026-10-16 晚已上线，基础版）**：视频笔记双层兜底——**官方字幕优先**（平台只给部分视频生成，实测约 2/3 有），**无字幕 → 自动下载视频 + 本地 faster-whisper 语音转写**（`transcript.txt`，按语义段分行；转写完视频即删）。参数：`--whisper-model`（默认 small，base 同音字误差明显如"流暖戏"=浏览器）、`--no-asr` 跳过。模型在 `<仓库根>/models/faster-whisper-<name>/`，首次自动从 hf-mirror 逐文件流式下载。
 > - **两个环境坑（已规避，改动前先看）**：①**不要用 huggingface_hub 下载器拿模型**——本环境实测对 hf-mirror 会拿到 0 字节文件，代码里是用 urllib 流式逐文件下载（`_model_dir()`）；②**PyAV 锁 16.x**——av 19 移除了 `metadata_errors` 参数，faster-whisper 1.2.1 会崩。
 > - **分工（2026-10-16 确认）**：本 skill 做**基础版**（字幕 + 本地 Whisper，够用就好）；通用型多级降级链（百炼/妙记）作为后续扩展。
 > - **认知修正存档（交叉验证）**：官方字幕**存在但覆盖不全**——曾误写为「web 端没有独立字幕轨道」。「时灵时不灵」机制 = 短时密集请求后 SSR 返回降级页面（54KB vs 57KB），冷却 2-3 分钟恢复；**urllib/requests 稳定命中降级页 → 假阴性**；Playwright 路线不受影响。

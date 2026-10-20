@@ -78,6 +78,16 @@ tags:
 
 ## 🚀 快速开始
 
+### 标准安装（完整功能：单篇速读 + 博主主页批量 + Obsidian 入库）
+
+```bash
+git clone https://github.com/judy123violet-max/xhs-curator.git
+cd xhs-curator
+python install.py        # 复制 Skill 到 Agent 技能目录 + 写入仓库位置标记 + 依赖检测
+```
+
+> ⚠️ 只把 `skill/` 目录单独复制到技能目录的安装方式**只支持单篇速读**（匿名单篇链接转 Markdown），**不能用于主页批量采集**——批量能力依赖仓库根目录的完整工具链。
+
 ### ⚡ 懒人安装（推荐给不想碰终端的人）
 
 把下面这段话直接发给你的 AI Agent（Claude Code / WorkBuddy / Cursor 都行），剩下的它代办：

@@ -129,6 +129,16 @@ All three inputs are built into the picker (`--notes` still accepts a custom lis
 
 ## 🚀 Quick start
 
+### Standard install (full features: single-note reading + profile batch + Obsidian import)
+
+```bash
+git clone https://github.com/judy123violet-max/xhs-curator.git
+cd xhs-curator
+python install.py        # copies the Skill into your Agent skills dir + writes a repo marker + checks dependencies
+```
+
+> ⚠️ Copying only the `skill/` directory into your skills folder **supports single-note reading only** (anonymous single links to Markdown) and **cannot drive profile batch collection** — batch relies on the full toolchain at the repository root.
+
 ### ⚡ One-liner install (if you'd rather not touch a terminal)
 
 Paste this into your AI agent (Claude Code / WorkBuddy / Cursor — any of them) and let it do the work:
