@@ -816,7 +816,7 @@ function pollJob(){
     $('btnFetchOne').disabled = !oneResolved;
     $('barTip').textContent = '点卡片=勾选；点标题或「原文↗」在本窗口看详情，勾选不会丢。⚠ 抓取进行中请勿关闭弹出的专用 Chrome 窗口，否则本轮中断（已抓完的不受影响，重跑自动续）';
     $('logStatus').textContent = j.status==='done' ? '✓ 任务完成'
-      : j.status==='partial' ? '⚠ 部分完成（详见结果卡）' : '任务失败（详见结果卡）';
+      : j.status==='partial' ? '⚠ 部分完成（详情可问 AI）' : '任务失败（详情可问 AI）';
     await loadManifest();
     if(j.type==='search'){ await loadList('search', true); if(cur==='search') render(); }
     if(cur==='done') renderDone(); else if(cur!=='done' && cur!=='one') render();
@@ -829,7 +829,7 @@ function pollJob(){
     } else if(j.status==='done'){
       toast('完成');
     } else {
-      toast('任务结束：' + j.status + '，结果与下一步见下方结果卡', '#B45309');
+      toast('抓取未全部完成——已抓完的自动跳过；原因和明细请直接问我', '#B45309');
     }
     // 完成反馈以持久结果卡为准（P0），不再只靠一次性 Toast
     await loadJobCard();
@@ -865,41 +865,26 @@ async function loadJobCard(){
   let j;
   try{ j = await (await fetch('/api/jobs')).json(); }catch(e){ return; }
   const card = $('jobCard');
-  const latest = (j.jobs||[]).find(x => !x.confirmed && x.status !== 'running');
+  // 2026-10-20 雅旭拍板：采集台只显示成功卡；失败/部分完成不在采集台提示
+  // （抓取失败了就失败了，结果由 AI 在对话里告知）
+  const latest = (j.jobs||[]).find(x => !x.confirmed && x.status === 'done');
   if(!latest){ card.style.display='none'; card.innerHTML=''; return; }
   const st = latest.stats || {};
-  const okN = st.ok ?? 0, fN = st.failed ?? 0, skN = st.skipped ?? 0;
+  const okN = st.ok ?? 0, skN = st.skipped ?? 0;
   const act = latest.actions || {};
-  let head = '', btns = '';
-  if(latest.status === 'done'){
-    head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
-    if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
-    if(act.continue_flow) btns += ` <button class="primary" onclick="continueFlow('${latest.job_id}')">继续整理（OCR + 导出）</button>`;
-  }else if(latest.status === 'partial'){
-    head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
-  }else{
-    head = `<b style="color:#e64545">✗ 上次抓取失败</b>` + (latest.stats ? `（成功 ${okN} · 失败 ${fN}）` : '（进程异常终止，无统计；已抓完的自动跳过）');
-  }
-  // 按钮按后端下发的 actions 渲染（2026-10-20 复验）：
-  // 无失败明细（崩溃无统计）→「查看运行日志」，绝不显示必然空转的重试按钮
-  if(act.log) btns += ` <button onclick="viewJobLog('${latest.job_id}')">查看运行日志</button>`;
-  if(act.failures) btns += ` <button onclick="toggleFailures()">查看失败原因</button>`;
-  if(act.retry) btns += ` <button class="teal" onclick="retryFailed('${latest.job_id}')">仅重试失败项</button>`;
+  let btns = '';
+  const head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
+  if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
+  if(act.continue_flow) btns += ` <button class="primary" onclick="continueFlow('${latest.job_id}')">继续整理（OCR + 导出）</button>`;
   btns += ` <button onclick="confirmJob('${latest.job_id}')">知道了</button>`;
-  const fails = act.failures ? (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('') : '';
   card.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:10px 16px;background:var(--bg2,#F7F8FA)">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${head}
       <span style="font-size:11px;color:#888">${latest.started_at||''} · ${latest.type}${latest.with_comments===false?' · 不抓评论':''}</span>
       <span style="flex:1"></span>${btns}
     </div>
-    ${latest.status==='done'?'<div class="meta" style="margin-top:6px">下一步：回到 Agent 对话说「导入 Obsidian」，我会用本地转换把它接进导出管线（不重抓）。</div>':''}
-    <ul id="failList" style="display:none;margin:8px 0 0;color:#7a3b3b;font-size:12px">${fails}</ul>
+    <div class="meta" style="margin-top:6px">下一步：回到 Agent 对话说「导入 Obsidian」，我会用本地转换把它接进导出管线（不重抓）。</div>
   </div>`;
   card.style.display = 'block';
-}
-function toggleFailures(){
-  const el = document.getElementById('failList');
-  if(el) el.style.display = el.style.display==='none' ? 'block' : 'none';
 }
 async function viewJobLog(jid){
   try{
