@@ -152,6 +152,26 @@ class InstallFlowTest(unittest.TestCase):
         after = os.listdir(os.path.join(self.skills, "xhs-curator"))
         self.assertEqual(sorted(before), sorted(after))
 
+    def test_dead_interpreter_stops_routing(self):
+        """复验 P0-4：marker 记录的解释器失效 → 验证失败、路由返回 None，
+        绝不静默回退到当前解释器（防「装在 A、跑在 B」重现）"""
+        self._install()
+        dest = os.path.join(self.skills, "xhs-curator")
+        marker = os.path.join(dest, installer.MARKER_NAME)
+        with open(marker, encoding="utf-8") as f:
+            m = json.load(f)
+        dead = os.path.join(self._tmp.name, "gone_python.exe")
+        m["python"] = dead
+        with open(marker, "w", encoding="utf-8") as f:
+            json.dump(m, f)
+        # resolve_repo_root → None（路由停止，不回退）
+        self.assertIsNone(installer.resolve_repo_root(dest))
+        # verify_marker → 失败 + 修复引导
+        ok, detail = installer.verify_marker(dest)
+        self.assertFalse(ok)
+        self.assertIn("重新运行 install.py", detail)
+        self.assertIn("--with-deps", detail)
+
     def test_resolve_repo_root_priority(self):
         self._install()
         dest = os.path.join(self.skills, "xhs-curator")
@@ -176,10 +196,17 @@ class DefaultSkillDirTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.home = os.path.join(self._tmp.name, "home")
-        self._orig = os.environ.get("USERPROFILE"), os.environ.get("HOME")
+        # 记录原变量是否存在及原值（2026-10-21 复验 P0-3：
+        # 原本不存在的变量恢复时不得 os.environ[...] = None，会 TypeError）
+        self._orig_env = {k: os.environ[k] for k in ("USERPROFILE", "HOME")
+                          if k in os.environ}
 
     def tearDown(self):
-        os.environ["USERPROFILE"], os.environ["HOME"] = self._orig
+        for k in ("USERPROFILE", "HOME"):
+            if k in self._orig_env:
+                os.environ[k] = self._orig_env[k]
+            else:
+                os.environ.pop(k, None)   # 原本不存在 → 恢复为不存在
         self._tmp.cleanup()
 
     def _set_home(self):

@@ -129,7 +129,6 @@ def dependency_report(with_deps=False, python_exe=None):
         else:
             lines.append(f"[!] 请执行依赖安装（装给运行脚本的那个解释器）:\n    {cmd}")
     return lines
-    return lines
 
 
 def install(repo_root, skill_dir, python_exe=None):
@@ -192,11 +191,13 @@ def verify_marker(skill_dir):
     if missing:
         return False, (f"marker 指向的仓库不完整，缺: {missing}\n"
                        f"    修复: 重新运行 install.py 或重新 git clone")
-    detail = f"仓库有效: {root}"
     if python_exe and not os.path.exists(python_exe):
-        detail += (f"\n    ⚠ marker 记录的解释器已不存在: {python_exe}\n"
-                   f"    修复: 重新运行 install.py（会用当前解释器更新记录）")
-    return True, detail
+        # 2026-10-21 复验 P0-4：解释器失效不得静默降级到当前解释器
+        # （否则重现「依赖装在 A、脚本用 B 跑」），必须验证失败并引导修复
+        return False, (f"marker 记录的 Python 解释器已不存在: {python_exe}\n"
+                       f"    修复: 重新运行 install.py（必要时加 --with-deps），"
+                       f"会用当前解释器更新记录")
+    return True, f"仓库有效: {root}（解释器: {python_exe}）"
 
 
 def resolve_repo_root(skill_dir):
@@ -213,8 +214,11 @@ def resolve_repo_root(skill_dir):
             if got:
                 root, python_exe = got
                 if root and os.path.exists(os.path.join(root, "xhs_export_md.py")):
-                    return root, (python_exe if python_exe and os.path.exists(python_exe)
-                                  else sys.executable)
+                    if python_exe and not os.path.exists(python_exe):
+                        # 2026-10-21 复验 P0-4：解释器失效 → 路由停止，
+                        # 不回退到当前解释器（防「装在 A、跑在 B」重现）
+                        return None
+                    return root, (python_exe or sys.executable)
         parent = os.path.dirname(d)
         if parent == d:
             return None
