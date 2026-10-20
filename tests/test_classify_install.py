@@ -64,6 +64,14 @@ class ClassifyLinkTest(unittest.TestCase):
         r = fa.classify_link("这句话里没有链接")
         self.assertEqual(r["link_type"], "invalid")
 
+    def test_shortlink_falling_to_homepage_is_unknown(self):
+        """无效短码被平台重定向到首页 → unknown（短码可能已失效），不误报无效"""
+        r = fa.classify_link(
+            "看我主页 http://xhslink.com/aBcD12", resolver=self.fake_resolver({
+                "http://xhslink.com/aBcD12": "http://www.xiaohongshu.com/"}))
+        self.assertEqual(r["link_type"], "unknown")
+        self.assertIn("短码可能已失效", r["reason"])
+
     def test_non_xhs_domain_invalid(self):
         r = fa.classify_link("https://github.com/judy123violet-max/xhs-curator")
         self.assertEqual(r["link_type"], "invalid")

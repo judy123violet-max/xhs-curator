@@ -432,6 +432,7 @@ def classify_link(text, resolver=None):
         return {"link_type": "invalid", "resolved_url": "", "note_id": "",
                 "reason": "输入中未找到链接"}
     last_error = ""
+    xhs_seen = False
     for u in urls:
         resolved = u
         if "xhslink." in u:
@@ -442,7 +443,13 @@ def classify_link(text, resolver=None):
                 continue
         host = urllib.parse.urlparse(resolved).netloc.lower()
         if "xiaohongshu.com" not in host:
+            if "xhslink." in u:
+                # 短链没能解开（网络波动等）→ 诚实态 unknown，不误报「链接无效」
+                return {"link_type": "unknown", "resolved_url": resolved,
+                        "note_id": "",
+                        "reason": "短链未能解析出小红书目标（请稍后重试或发送完整链接）"}
             continue
+        xhs_seen = True
         if re.search(r"/user/profile/[0-9A-Za-z]+", resolved):
             return {"link_type": "profile", "resolved_url": resolved,
                     "note_id": ""}
@@ -450,6 +457,13 @@ def classify_link(text, resolver=None):
         if m:
             return {"link_type": "single", "resolved_url": resolved,
                     "note_id": m.group(1)}
+    if xhs_seen:
+        # 是小红书链接，但解析后没落到具体笔记/主页——典型：无效短码被平台
+        # 重定向到首页。诚实态 unknown，不误报「链接无效」
+        return {"link_type": "unknown", "resolved_url": resolved if urls else "",
+                "note_id": "",
+                "reason": "链接是小红书地址，但未能解析出具体笔记或主页"
+                          "（短码可能已失效），请重新分享"}
     if last_error:
         return {"link_type": "unknown", "resolved_url": "", "note_id": "",
                 "reason": last_error + "（请稍后重试或发送完整链接）"}
@@ -552,11 +566,13 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
-    link = sys.argv[1]
     if "--classify" in sys.argv:
         # 统一入口硬路由（2026-10-20 P0）：AI 先跑分类拿 link_type，再按类型路由
-        print(json.dumps(classify_link(link), ensure_ascii=False))
+        i = sys.argv.index("--classify")
+        target = sys.argv[i + 1] if len(sys.argv) > i + 1 else ""
+        print(json.dumps(classify_link(target), ensure_ascii=False))
         return
+    link = sys.argv[1]
     outdir = sys.argv[2] if len(sys.argv) > 2 else "xhs_note"
     os.makedirs(outdir, exist_ok=True)
     imgdir = os.path.join(outdir, "imgs")
