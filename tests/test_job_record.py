@@ -24,7 +24,8 @@ class JobStatsPayloadTest(unittest.TestCase):
     def test_counts_and_failures(self):
         m = self.manifest(["a", "b"], [("c", "标题C", "goto: Timeout"), ("d", "", "")])
         s = fsc.job_stats_payload(["a", "b", "c", "d"], m, skipped=3)
-        self.assertEqual(s["planned"], 4)
+        self.assertEqual(s["total"], 4)
+        self.assertEqual(s["processed"], 4)
         self.assertEqual(s["ok"], 2)
         self.assertEqual(s["failed"], 2)
         self.assertEqual(s["skipped"], 3)

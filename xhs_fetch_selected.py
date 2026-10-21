@@ -355,11 +355,11 @@ def plan_batch(notes_full, done, offset=0, count=0, only="", no_resume=False):
             for i, note in candidates]
 
 
-def job_stats_payload(todo_ids, manifest, skipped=0):
-    """本轮统计（2026-10-20 P0 持久任务结果）：供工作台任务记录消费。
-
-    只统计本轮 todo 里的 note_id（manifest 会合并历史批次记录，按 id 过滤）。
-    failed 条目带可读 error 摘要（缺省「未取得笔记数据」）。
+def job_stats_payload(todo_ids, manifest, skipped=0, current=None,
+                      stage="fetching", user_stopped=False):
+    """本轮统计（2026-10-20 P0 持久任务结果；2026-10-21 P0-A 增加运行期字段）：
+    stage/total/processed/current_note_title 供工作台进度条与 AI 汇报消费。
+    processed = success + failed（不含 skipped）；只统计本轮 todo 的 note_id。
     """
     recs = [m for m in manifest if m.get("note_id") in set(todo_ids)]
     ok = sum(1 for r in recs if r.get("ok"))
@@ -368,8 +368,11 @@ def job_stats_payload(todo_ids, manifest, skipped=0):
                  "title": (r.get("list_title") or "")[:40],
                  "error": (r.get("error") or "未取得笔记数据").strip()}
                 for r in recs if not r.get("ok")]
-    return {"planned": len(todo_ids), "ok": ok, "failed": failed,
-            "skipped": skipped, "failures": failures}
+    return {"stage": stage, "total": len(todo_ids),
+            "processed": ok + failed, "ok": ok, "failed": failed,
+            "skipped": skipped, "user_stopped": user_stopped,
+            "current_note_title": (current or "")[:40],
+            "failures": failures}
 
 
 def main():
@@ -453,22 +456,37 @@ def main():
         log("=" * 64)
     todo_ids = [n.get("note_id") for _, n in todo]
     skipped = len(notes_full) - len(todo)
+    ctrl_path = os.environ.get("XHS_JOB_CONTROL") or ""
 
-    def write_job_stats(manifest_now):
-        """任务统计回写（2026-10-20 P0）：工作台经 XHS_JOB_STATS 指定的路径收集"""
+    def control_stop_requested():
+        """协作式停止（2026-10-21 P0-A）：工作台经 XHS_JOB_CONTROL 写入
+        stop_requested；抓取循环在「每篇开始前」读取，收到即不再开始下一篇"""
+        if not ctrl_path or not os.path.exists(ctrl_path):
+            return False
+        try:
+            with open(ctrl_path, encoding="utf-8") as f:
+                return bool(json.load(f).get("stop_requested"))
+        except Exception:
+            return False
+
+    def write_job_stats(manifest_now, current=None, stage="fetching",
+                        user_stopped=False):
+        """任务统计回写（2026-10-20 P0）：工作台经 XHS_JOB_STATS 指定的路径收集；
+        2026-10-21 P0-A 起逐篇更新（运行期进度），不再只终态写一次"""
         p = os.environ.get("XHS_JOB_STATS") or ""
         if not p:
             return
         try:
             with open(p, "w", encoding="utf-8") as f:
-                json.dump(job_stats_payload(todo_ids, manifest_now, skipped),
+                json.dump(job_stats_payload(todo_ids, manifest_now, skipped,
+                                            current, stage, user_stopped),
                           f, ensure_ascii=False, indent=2)
         except Exception as e:
             log(f"! 任务统计回写失败: {e}")
 
     if not todo:
         log("[√] 没有需要抓取的笔记（全部完成或切片为空）")
-        write_job_stats([])
+        write_job_stats([], stage="done")
         return
     if not single:
         log("=" * 64)
@@ -539,7 +557,14 @@ def main():
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 page.wait_for_timeout(1100)
 
+        stopped_by_user = False
         for i, note in todo:
+            # 协作式停止（2026-10-21 P0-A）：每篇开始前读控制文件，收到即
+            # 不再开始下一篇；已完成内容保留，终态由 picker 记为 stopped
+            if control_stop_requested():
+                log("⏹ 收到停止请求——不再开始下一篇，已完成内容保留")
+                stopped_by_user = True
+                break
             nid = note.get("note_id")
             title = note.get("title") or ""
             url = note.get("url") or f"https://www.xiaohongshu.com/explore/{nid}"
@@ -548,6 +573,7 @@ def main():
                 log(f"\n[单篇 {i:02d}] {label} ({note.get('type')})")
             else:
                 log(f"\n[{i}/{len(notes_full)}] {label} ({note.get('type')})")
+            write_job_stats(manifest, current=label)
 
             rec = {"note_id": nid, "list_title": title, "list_type": note.get("type"),
                    "list_date": note.get("date"), "url": url, "ok": False, "_seq": i,
@@ -732,6 +758,7 @@ def main():
             # raw.json + 骨架 md
             with open(os.path.join(folder, "raw.json"), "w", encoding="utf-8") as f:
                 json.dump(rec, f, ensure_ascii=False, indent=2)
+            write_job_stats(manifest)
 
             lines = [f"# {ntitle}", ""]
             meta = []
@@ -786,7 +813,8 @@ def main():
         json.dump(all_recs, f, ensure_ascii=False, indent=2)
 
     okn = sum(1 for m in all_recs if m.get("ok"))
-    write_job_stats(manifest)
+    write_job_stats(manifest, stage="stopped" if stopped_by_user else "done",
+                    user_stopped=stopped_by_user)
     log("\n" + "=" * 64)
     log(f"[√] 本次完成 {len(manifest)} 篇 | 累计 {okn}/{len(all_recs)} 篇，产出在 downloads/")
     for m in all_recs:

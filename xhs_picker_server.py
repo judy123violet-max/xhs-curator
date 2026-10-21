@@ -114,8 +114,9 @@ def compute_card_actions(rec):
     """
     failed_ids = extract_failed_ids(rec)
     status = rec.get("status")
-    return {"view_notes": status == "done",
+    return {"view_notes": status in ("done", "stopped", "partial"),
             "continue_flow": status == "done",
+            "resume": status == "stopped",   # 继续抓取剩余（重跑即自动续）
             "retry": status in ("partial", "failed") and bool(failed_ids),
             "failures": status in ("partial", "failed") and bool(failed_ids),
             "log": status == "failed"}
@@ -127,8 +128,10 @@ def compute_job_status(jtype, stats, exit_code):
         return "done" if exit_code == 0 else "failed"
     if not isinstance(stats, dict):
         return "failed"               # 子进程异常终止，无统计 → failed
+    if stats.get("user_stopped"):
+        return "stopped"          # 用户协作式停止：诚实终态，非 failed
     ok = stats.get("ok") or 0
-    planned = stats.get("planned") or 0
+    planned = stats.get("total") or stats.get("planned") or 0
     if planned > 0 and ok == planned:
         return "done"
     if 0 < ok < planned:
@@ -186,6 +189,20 @@ def build_cmd(jtype, keyword="", url="", with_comments=True, only_ids=None):
     return cmd, None
 
 
+def request_cooperative_stop():
+    """协作式停止（2026-10-21 P0-A）：写控制文件，抓取循环在当前篇结束后
+    停止；已完成内容保留，终态记为 stopped（不用 p.terminate()）。
+    返回 (ok, mode)。"""
+    with JOB_LOCK:
+        rec = JOB.get("record") or {}
+        if rec.get("job_id") and JOB["status"] == "running":
+            cpath = os.path.join(jobs_dir(), rec["job_id"] + ".control.json")
+            with open(cpath, "w", encoding="utf-8") as f:
+                json.dump({"stop_requested": True}, f)
+            return True, "cooperative"
+        return False, "当前没有运行中的任务"
+
+
 def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
     with JOB_LOCK:
         p = JOB.get("proc")
@@ -215,7 +232,8 @@ def start_job(jtype, keyword="", url="", with_comments=True, only_ids=None):
             os.makedirs(jobs_dir(), exist_ok=True)
             env = {**os.environ,
                    "PYTHONIOENCODING": "utf-8",
-                   "XHS_JOB_STATS": os.path.join(jobs_dir(), rec["job_id"] + ".stats.json")}
+                   "XHS_JOB_STATS": os.path.join(jobs_dir(), rec["job_id"] + ".stats.json"),
+                   "XHS_JOB_CONTROL": os.path.join(jobs_dir(), rec["job_id"] + ".control.json")}
             logf = open(os.path.join(jobs_dir(), rec["job_id"] + ".log"),
                         "w", encoding="utf-8")
             p = subprocess.Popen(cmd, cwd=BASE, stdout=subprocess.PIPE,
@@ -309,8 +327,17 @@ def job_state():
     with JOB_LOCK:
         p = JOB.get("proc")
         running = bool(p and p.poll() is None)
+        st = {}
+        sp = os.path.join(jobs_dir(), ((JOB.get("record") or {}).get("job_id") or "") + ".stats.json")
+        if running and os.path.exists(sp):
+            try:
+                with open(sp, encoding="utf-8") as f:
+                    st = json.load(f)
+            except Exception:
+                st = {}
         return {"status": JOB["status"], "type": JOB["type"], "exit": JOB["exit"],
                 "job_id": (JOB.get("record") or {}).get("job_id", ""),
+                "stats": st,
                 "running": running, "lines": list(JOB["lines"])[-300:]}
 
 
@@ -522,6 +549,16 @@ table.done td.t{font-weight:600;max-width:420px}
     <span class="st" id="logStatus">任务运行中…</span>
     <button onclick="stopJob()">停止</button>
     <button onclick="toggleLog()">收起</button>
+  </div>
+  <div id="progWrap" style="display:none;padding:10px 14px 0">
+    <div class="bar" style="margin:0 0 6px"><div id="progBar" style="width:0%"></div></div>
+    <div class="stats" style="margin:0 0 4px">
+      <span><b id="progText">已处理 0 / 0</b></span>
+      <span class="tag ok" id="progOk">成功 0</span>
+      <span class="tag fail" id="progFail">失败 0</span>
+      <span class="tag skip" id="progSkip">跳过 0</span>
+    </div>
+    <div class="note" id="progCurrent"></div>
   </div>
   <pre id="log"></pre>
 </div>
@@ -796,7 +833,11 @@ function fetchOne(){
   jobStart({type:'one', url: oneResolved.url, with_comments: $('withComments').checked});
 }
 $('oneUrl').addEventListener('keydown', e=>{ if(e.key==='Enter') resolveOne(); });
-function stopJob(){ fetch('/job/stop', {method:'POST'}); }
+function stopJob(){
+  fetch('/job/stop', {method:'POST'});
+  const b = document.querySelector('.lh button');
+  if(b){ b.textContent = '⏳ 停止请求已接收（正在停止，已完成内容会保留）'; b.disabled = true; }
+}
 function toggleLog(){ $('logpanel').style.display = 'none'; }
 
 function pollJob(){
@@ -813,6 +854,19 @@ function pollJob(){
     if(j.running || j.status === 'running'){
       $('logStatus').textContent = (j.type==='fetch' ? '抓取'
         : j.type==='one' ? '单篇抓取' : '搜索') + '运行中…';
+      // 结构化进度（2026-10-21 P0-A）：进度条/统计/当前篇，日志降为辅助
+      const st = j.stats || {};
+      if(st.total){
+        const processed = st.processed ?? 0;
+        $('progWrap').style.display = 'block';
+        $('progBar').style.width = Math.round(processed / st.total * 100) + '%';
+        $('progText').textContent = `已处理 ${processed} / ${st.total}`;
+        $('progOk').textContent = `成功 ${st.ok ?? 0}`;
+        $('progFail').textContent = `失败 ${st.failed ?? 0}`;
+        $('progSkip').textContent = `跳过 ${st.skipped ?? 0}`;
+        $('progCurrent').textContent = st.current_note_title
+          ? `正在处理：${st.current_note_title}` : '正在汇总…';
+      }
       return;
     }
     clearInterval(timer); polling = false;
@@ -881,10 +935,14 @@ async function loadJobCard(){
   const okN = st.ok ?? 0, fN = st.failed ?? 0, skN = st.skipped ?? 0;
   const act = latest.actions || {};
   let head = '', btns = '';
-  if(latest.status === 'done'){
+    if(latest.status === 'done'){
     head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
     if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
-    if(act.continue_flow) btns += ` <button class="primary" onclick="continueFlow('${latest.job_id}')">继续整理（OCR + 导出）</button>`;
+    if(act.continue_flow) btns += ` <button onclick="continueFlow('${latest.job_id}')">复制导入 Obsidian 指令</button>`;
+  }else if(latest.status === 'stopped'){
+    head = `<b style="color:var(--amber)">⏹ 上次抓取已停止（用户请求）：已完成 ${okN} / ${st.total ?? okN} 篇` + (skN?` · 跳过 ${skN}`:'') + '</b>';
+    if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
+    if(act.resume) btns += ` <button class="primary" onclick="startFetch()">继续抓取剩余（自动续，不重抓已完成）</button>`;
   }else if(latest.status === 'partial'){
     head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
   }else{
@@ -896,12 +954,15 @@ async function loadJobCard(){
   if(act.retry) btns += ` <button class="teal" onclick="retryFailed('${latest.job_id}')">仅重试失败项</button>`;
   btns += ` <button onclick="confirmJob('${latest.job_id}')">知道了</button>`;
   const fails = act.failures ? (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('') : '';
+  const nextStep = latest.status === 'done'
+    ? '已抓取完成。若要导入 Obsidian，请回到当前 Agent 对话发送「导入 Obsidian」；不会重新抓取。'
+    : '下一步：回到 Agent 对话说「导入 Obsidian」，我会用本地转换把它接进导出管线（不重抓）。';
   card.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:10px 16px;background:var(--bg2,#F7F8FA)">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${head}
       <span style="font-size:11px;color:#888">${latest.started_at||''} · ${latest.type}${latest.with_comments===false?' · 不抓评论':''}</span>
       <span style="flex:1"></span>${btns}
     </div>
-    <div class="meta" style="margin-top:6px">下一步：回到 Agent 对话说「导入 Obsidian」，我会用本地转换把它接进导出管线（不重抓）。</div>
+    <div class="meta" style="margin-top:6px">${nextStep}</div>
   </div>`;
   card.style.display = 'block';
 }
@@ -1158,6 +1219,23 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/job/stop":
+            # 2026-10-21 P0-A：正常停止改协作式（p.terminate() 仅 /job/kill 兜底）
+            ok, mode = request_cooperative_stop()
+            self._json({"ok": ok, "mode": mode,
+                        "error": None if ok else mode})
+            return
+
+        if self.path == "/job/kill":
+            with JOB_LOCK:
+                p = JOB.get("proc")
+                if p and p.poll() is None:
+                    p.terminate()
+                    self._json({"ok": True, "mode": "kill"})
+                else:
+                    self._json({"ok": False, "error": "没有运行中的进程"})
+            return
+
+        if self.path == "/job/stop_legacy":
             with JOB_LOCK:
                 p = JOB.get("proc")
                 if p and p.poll() is None:
