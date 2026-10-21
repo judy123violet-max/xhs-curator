@@ -938,10 +938,11 @@ async function loadJobCard(){
     if(latest.status === 'done'){
     head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
     if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
-    if(act.continue_flow) btns += ` <button onclick="continueFlow('${latest.job_id}')">复制导入 Obsidian 指令</button>`;
+    if(act.continue_flow) btns += ` <button onclick="continueFlow('${latest.job_id}')">复制「生成 Markdown」请求</button>`;
   }else if(latest.status === 'stopped'){
     head = `<b style="color:var(--amber)">⏹ 上次抓取已停止（用户请求）：已完成 ${okN} / ${st.total ?? okN} 篇` + (skN?` · 跳过 ${skN}`:'') + '</b>';
-    if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
+    if(act.open_location) btns = `<button class="ghost" onclick="openDownloads()">打开保存位置</button>`;
+    if(act.view_notes) btns += ` <button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
     if(act.resume) btns += ` <button class="primary" onclick="startFetch()">继续抓取剩余（自动续，不重抓已完成）</button>`;
   }else if(latest.status === 'partial'){
     head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
@@ -955,8 +956,10 @@ async function loadJobCard(){
   btns += ` <button onclick="confirmJob('${latest.job_id}')">知道了</button>`;
   const fails = act.failures ? (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('') : '';
   const nextStep = latest.status === 'done'
-    ? '已抓取完成。若要导入 Obsidian，请回到当前 Agent 对话发送「导入 Obsidian」；不会重新抓取。'
-    : '下一步：回到 Agent 对话说「导入 Obsidian」，我会用本地转换把它接进导出管线（不重抓）。';
+    ? '📁 素材已保存至工作台目录的 downloads/（原始素材包，Markdown 尚未生成）。如需生成 Markdown，请回到当前 Agent 对话发送「生成 Markdown」。'
+    : latest.status === 'stopped'
+    ? '📁 已完成内容已保存至工作台目录的 downloads/。可点「继续抓取剩余」自动续，或回 Agent 对话查询。'
+    : '📁 部分素材已保存至工作台目录的 downloads/。失败原因与下一步可回 Agent 对话查询。';
   card.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:10px 16px;background:var(--bg2,#F7F8FA)">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${head}
       <span style="font-size:11px;color:#888">${latest.started_at||''} · ${latest.type}${latest.with_comments===false?' · 不抓评论':''}</span>
@@ -965,6 +968,9 @@ async function loadJobCard(){
     <div class="meta" style="margin-top:6px">${nextStep}</div>
   </div>`;
   card.style.display = 'block';
+}
+function openDownloads(){
+  fetch('/open-downloads');
 }
 async function viewJobLog(jid){
   try{
@@ -976,11 +982,11 @@ async function viewJobLog(jid){
   }catch(e){ toast('读取日志失败: ' + e, '#e64545'); }
 }
 async function continueFlow(jid){
-  const guide = '请把刚才抓取的笔记继续整理入库：逐图 OCR 价值判定后，运行 xhs_export_md.py 导出到我的 Obsidian 库（任务 ' + jid + '）';
+  const guide = '生成 Markdown';
   let copied = false;
   try{ await navigator.clipboard.writeText(guide); copied = true; }catch(e){}
-  toast(copied ? '引导语已复制——粘贴到 Agent 对话发送即可继续整理入库'
-               : '请回到 Agent 对话说：「' + guide + '」', 'var(--teal)');
+  toast(copied ? '已复制「生成 Markdown」——粘贴到当前 Agent 对话发送'
+               : '请回到当前 Agent 对话手动发送「生成 Markdown」', 'var(--teal)');
 }
 async function confirmJob(jid){
   try{ await fetch('/api/jobs/' + jid + '/confirm', {method:'POST'}); }catch(e){}
@@ -1069,6 +1075,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, data, ct)
             except Exception as e:
                 self._send(502, f"img fail: {e}".encode(), "text/plain")
+            return
+
+        if u.path == "/open-downloads":
+            dpath = os.path.join(BASE, "downloads")
+            os.makedirs(dpath, exist_ok=True)
+            try:
+                os.startfile(dpath)   # Windows 资源管理器
+                self._json({"ok": True})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
             return
 
         if u.path == "/api/jobs":
