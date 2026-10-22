@@ -73,6 +73,8 @@ Browse notes as cards with select-all / invert / video-only / image-only / keywo
 
 **Single note tab**: paste a share link (or a whole share text block) and hand it to the AI — it resolves and fetches in one step, with already-fetched notes detected automatically.
 
+**Long-task progress & control (shipped 2026-10-22)**: during batch fetching the workbench shows a live structured progress bar (processed N/M, success/fail/skip, current note). **Stopping is cooperative** — hit "Stop" and the fetcher finishes the current note, keeps everything already saved, and records the task as "stopped" rather than "failed". A persistent result card stays on the page afterwards: the success card offers open-save-location / view-fetched-notes / copy a "generate Markdown" request; partial cards expand failure reasons with a **retry-failed-only** action; new tabs never show stale cards from other sessions.
+
 ## ✨ Features
 
 **Discovery & collection**
