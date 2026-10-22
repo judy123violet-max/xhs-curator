@@ -357,9 +357,9 @@ def plan_batch(notes_full, done, offset=0, count=0, only="", no_resume=False):
 
 def job_stats_payload(todo_ids, manifest, skipped=0, current=None,
                       stage="fetching", user_stopped=False):
-    """本轮统计（2026-10-20 P0 持久任务结果；2026-10-21 P0-A 增加运行期字段）：
-    stage/total/processed/current_note_title 供工作台进度条与 AI 汇报消费。
-    processed = success + failed（不含 skipped）；只统计本轮 todo 的 note_id。
+    """本轮统计（2026-10-20 P0；2026-10-21 P0-A 运行期字段；2026-10-22 P0-1 契约统一）：
+    total = 本任务全部选中项（含断点跳过）；processed = success + failed + skipped
+    （与已批准原型口径一致，进度条「已处理 N/M」自洽）；只统计本轮 todo 的 note_id。
     """
     recs = [m for m in manifest if m.get("note_id") in set(todo_ids)]
     ok = sum(1 for r in recs if r.get("ok"))
@@ -368,8 +368,9 @@ def job_stats_payload(todo_ids, manifest, skipped=0, current=None,
                  "title": (r.get("list_title") or "")[:40],
                  "error": (r.get("error") or "未取得笔记数据").strip()}
                 for r in recs if not r.get("ok")]
-    return {"stage": stage, "total": len(todo_ids),
-            "processed": ok + failed, "ok": ok, "failed": failed,
+    total = len(todo_ids) + skipped
+    return {"stage": stage, "total": total,
+            "processed": ok + failed + skipped, "ok": ok, "failed": failed,
             "skipped": skipped, "user_stopped": user_stopped,
             "current_note_title": (current or "")[:40],
             "failures": failures}

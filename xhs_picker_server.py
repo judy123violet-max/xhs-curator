@@ -130,11 +130,11 @@ def compute_job_status(jtype, stats, exit_code):
         return "failed"               # 子进程异常终止，无统计 → failed
     if stats.get("user_stopped"):
         return "stopped"          # 用户协作式停止：诚实终态，非 failed
-    ok = stats.get("ok") or 0
-    planned = stats.get("total") or stats.get("planned") or 0
-    if planned > 0 and ok == planned:
-        return "done"
-    if 0 < ok < planned:
+    total = stats.get("total") or stats.get("planned") or 0
+    processed = stats.get("processed") or 0
+    if total > 0 and processed >= total:
+        return "done"          # 全部处理完（含全 skipped 的空跑）
+    if 0 < processed < total:
         return "partial"
     return "failed"
 
@@ -780,6 +780,11 @@ async function jobStart(payload){
     }
     $('btnFetch').disabled = true; $('btnSearch').disabled = true;
     $('btnResolve').disabled = true; $('btnFetchOne').disabled = true;
+    // 重置进度区与停止按钮（2026-10-22 复验：新任务不遗留上一任务状态）
+    $('progWrap').style.display = 'none';
+    $('progBar').style.width = '0%';
+    const stopBtn = document.querySelector('.lh button');
+    if(stopBtn){ stopBtn.disabled = false; stopBtn.textContent = '停止'; }
     try{
       const r2 = await (await fetch('/api/job')).json();
       if(r2.job_id) sessionStorage.setItem('xhs_current_job', r2.job_id);
@@ -833,10 +838,18 @@ function fetchOne(){
   jobStart({type:'one', url: oneResolved.url, with_comments: $('withComments').checked});
 }
 $('oneUrl').addEventListener('keydown', e=>{ if(e.key==='Enter') resolveOne(); });
-function stopJob(){
-  fetch('/job/stop', {method:'POST'});
+async function stopJob(){
+  // 2026-10-22 复验 P0-2：结果诚实——仅在确认后端受理后才改按钮；
+  // 失败则 toast 并保持可操作
   const b = document.querySelector('.lh button');
-  if(b){ b.textContent = '⏳ 停止请求已接收（正在停止，已完成内容会保留）'; b.disabled = true; }
+  try{
+    const j = await (await fetch('/job/stop', {method:'POST'})).json();
+    if(j.ok){
+      if(b){ b.textContent = '⏳ 停止请求已接收（正在停止，已完成内容会保留）'; b.disabled = true; }
+    }else{
+      toast(j.error || '停止失败——请重试', '#e64545');
+    }
+  }catch(e){ toast('停止请求发送失败: ' + e + '——请重试', '#e64545'); }
 }
 function toggleLog(){ $('logpanel').style.display = 'none'; }
 
@@ -873,8 +886,12 @@ function pollJob(){
     $('btnFetch').disabled = false; $('btnSearch').disabled = false;
     $('btnResolve').disabled = false;
     $('btnFetchOne').disabled = !oneResolved;
+    // 恢复停止按钮（2026-10-22 复验 P0-2：新任务启动/终态后正确恢复）
+    const stopBtn = document.querySelector('.lh button');
+    if(stopBtn){ stopBtn.disabled = false; stopBtn.textContent = '停止'; }
     $('barTip').textContent = '点卡片=勾选；点标题或「原文↗」在本窗口看详情，勾选不会丢。⚠ 抓取进行中请勿关闭弹出的专用 Chrome 窗口，否则本轮中断（已抓完的不受影响，重跑自动续）';
     $('logStatus').textContent = j.status==='done' ? '✓ 任务完成'
+      : j.status==='stopped' ? `⏹ 已停止：已完成 ${j.stats?.ok ?? 0} / ${j.stats?.total ?? 0}，内容已保留`
       : j.status==='partial' ? '⚠ 部分完成（详见下方结果卡）' : '任务失败（详见下方结果卡）';
     await loadManifest();
     if(j.type==='search'){ await loadList('search', true); if(cur==='search') render(); }

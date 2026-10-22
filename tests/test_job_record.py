@@ -24,8 +24,8 @@ class JobStatsPayloadTest(unittest.TestCase):
     def test_counts_and_failures(self):
         m = self.manifest(["a", "b"], [("c", "标题C", "goto: Timeout"), ("d", "", "")])
         s = fsc.job_stats_payload(["a", "b", "c", "d"], m, skipped=3)
-        self.assertEqual(s["total"], 4)
-        self.assertEqual(s["processed"], 4)
+        self.assertEqual(s["total"], 7)      # todo 4 + skipped 3
+        self.assertEqual(s["processed"], 7)  # ok 2 + failed 2 + skipped 3
         self.assertEqual(s["ok"], 2)
         self.assertEqual(s["failed"], 2)
         self.assertEqual(s["skipped"], 3)
@@ -43,11 +43,11 @@ class ComputeJobStatusTest(unittest.TestCase):
     def test_matrix(self):
         self.assertEqual(srv.compute_job_status("search", None, 0), "done")
         self.assertEqual(srv.compute_job_status("search", None, 1), "failed")
-        stats = {"planned": 4, "ok": 4, "failed": 0}
+        stats = {"total": 4, "processed": 4, "ok": 4, "failed": 0}
         self.assertEqual(srv.compute_job_status("fetch", stats, 0), "done")
-        stats["ok"] = 2
+        stats["processed"] = 2
         self.assertEqual(srv.compute_job_status("fetch", stats, 0), "partial")
-        stats["ok"] = 0
+        stats["processed"] = 0
         self.assertEqual(srv.compute_job_status("fetch", stats, 0), "failed")
 
     def test_crash_without_stats_is_failed(self):

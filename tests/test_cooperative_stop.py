@@ -25,13 +25,18 @@ FAKE_BATCH = '''
 import json, os, sys, time
 sp = os.environ["XHS_JOB_STATS"]; cp = os.environ["XHS_JOB_CONTROL"]
 def ctrl():
-    try: return json.load(open(cp, encoding="utf-8")).get("stop_requested")
+    try:
+        with open(cp, encoding="utf-8") as f:
+            return json.load(f).get("stop_requested")
     except Exception: return False
-def write(stats): json.dump(stats, open(sp, "w", encoding="utf-8"), ensure_ascii=False)
+def write(stats):
+    with open(sp, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False)
 manifest = []
 for i in range(1, 6):
     if ctrl():
-        s = json.load(open(sp, encoding="utf-8"))
+        with open(sp, encoding="utf-8") as f:
+            s = json.load(f)
         s["user_stopped"] = True; s["stage"] = "stopped"
         write(s); sys.exit(0)
     time.sleep(0.15)
