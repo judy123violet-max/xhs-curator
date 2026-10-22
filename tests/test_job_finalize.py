@@ -19,14 +19,16 @@ import xhs_picker_server as srv     # noqa: E402
 
 FAKE_OK = ("import json, os, sys\n"
            "p = os.environ['XHS_JOB_STATS']\n"
-           "json.dump({'total': 1, 'processed': 1, 'ok': 1, 'failed': 0, 'skipped': 0,\n"
-           "           'failures': []}, open(p, 'w'))\n")
+           "with open(p, 'w') as f:   "
+           "    json.dump({'total': 1, 'processed': 1, 'ok': 1, 'failed': 0, 'skipped': 0,\n"
+           "               'failures': []}, f)\n")
 
 FAKE_PARTIAL = ("import json, os, sys\n"
                 "p = os.environ['XHS_JOB_STATS']\n"
-                "json.dump({'total': 2, 'processed': 1, 'ok': 1, 'failed': 1, 'skipped': 0,\n"
-                "           'failures': [{'note_id': 'bad', 'title': '坏的一篇',\n"
-                "                         'error': 'goto: Timeout'}]}, open(p, 'w'))\n")
+                "with open(p, 'w') as f:   "
+                "    json.dump({'total': 2, 'processed': 1, 'ok': 1, 'failed': 1, 'skipped': 0,\n"
+                "               'failures': [{'note_id': 'bad', 'title': '坏的一篇',\n"
+                "                             'error': 'goto: Timeout'}]}, f)\n")
 
 FAKE_CRASH = "import sys\nprint('boom')\nsys.exit(3)\n"
 

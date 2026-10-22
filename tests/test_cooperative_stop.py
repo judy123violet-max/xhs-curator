@@ -104,7 +104,8 @@ class CooperativeStopTest(unittest.TestCase):
             sp = os.path.join(self.jobs, jid + ".stats.json")
             if os.path.exists(sp):
                 try:
-                    stats = json.load(open(sp, encoding="utf-8"))
+                    with open(sp, encoding="utf-8") as f:
+                        stats = json.load(f)
                 except Exception:
                     stats = {}
                 if stats.get("processed", 0) >= 2:
