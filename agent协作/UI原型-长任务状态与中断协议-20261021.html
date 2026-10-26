@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>xhs-curator · 长任务状态 UI 原型（五状态 · 二次审阅版）</title>
+<style>
+:root{
+  --bg:#F5F7FA; --card:#FFFFFF; --border:#E3E8EF; --text:#2A3441; --sub:#8A94A6;
+  --teal:#0E9F8A; --amber:#B45309; --red:#C0392B; --blue:#2F6FD0;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);padding:24px;max-width:860px;margin:0 auto}
+h1{font-size:18px;margin-bottom:4px}
+.sub{font-size:12px;color:var(--sub);margin-bottom:16px}
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.tabs button{padding:8px 14px;border:1px solid var(--border);background:var(--card);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text)}
+.tabs button.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.state{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:14px}
+.note{font-size:12px;color:var(--sub);line-height:1.7;margin-top:10px}
+.bar{height:10px;background:#EDF1F6;border-radius:6px;overflow:hidden;margin:10px 0}
+.bar>div{height:100%;background:var(--teal);border-radius:6px}
+.bar>div.stop{background:var(--amber)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.stats{display:flex;gap:14px;font-size:13px;margin:8px 0;flex-wrap:wrap}
+.tag{padding:2px 8px;border-radius:6px;font-size:12px}
+.tag.ok{background:#E6F4EF;color:var(--teal)}
+.tag.fail{background:#FBEDEB;color:var(--red)}
+.tag.skip{background:#EEF1F5;color:var(--sub)}
+.tag.stop{background:#FFF4E0;color:var(--amber)}
+.tag.jid{background:#EEF1F5;color:var(--sub);font-family:Consolas,monospace}
+button.primary{background:var(--teal);color:#fff;border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px}
+button.warn{background:#fff;color:var(--red);border:1px solid var(--red);border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px}
+button.ghost{background:#fff;color:var(--blue);border:1px solid var(--blue);border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px}
+.log{background:#1E2530;color:#C9D4E3;font-family:Consolas,monospace;font-size:12px;border-radius:8px;padding:12px;margin-top:12px;line-height:1.6;max-height:180px;overflow:auto}
+.next{background:#EAF6F3;border-radius:8px;padding:10px 12px;font-size:13px;margin-top:12px;line-height:1.8}
+.candidate{background:#FFF9E8;border:1px dashed #D9B44A;border-radius:8px;padding:8px 12px;font-size:12px;color:#7A5B10;margin-top:10px}
+.def{background:#F0F4F9;border-radius:8px;padding:8px 12px;font-size:12px;color:var(--sub);margin-top:10px}
+.faillist{font-size:12px;color:var(--red);margin-top:8px;line-height:1.8}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<h1>xhs-curator · 长任务状态 UI 原型（二次审阅版）</h1>
+<div class="sub">规格草案 §7 五个状态（新增 failed 终态）· 静态 mock 数据 · 未接生产代码 · 2026-10-21 修订版：响应 Codex 审阅 7 项修订意见</div>
+
+<div class="tabs">
+  <button class="on" onclick="show(1,this)">① 抓取中</button>
+  <button onclick="show(2,this)">② 用户 2/5 停止</button>
+  <button onclick="show(3,this)">③ 部分完成</button>
+  <button onclick="show(4,this)">④ 素材抓取完成</button>
+  <button onclick="show(5,this)">⑤ 全部失败（终态）</button>
+</div>
+
+<!-- 状态 1：抓取中（含停止状态过渡演示） -->
+<div class="state" id="s1">
+  <div class="row">
+    <b>整号批量采集 · 谷谷谷雨（秋招版）</b>
+    <span class="tag jid">job 20261021-013000-001-fetch · 本页发起</span>
+    <span style="flex:1"></span>
+    <button class="warn" id="stopBtn1" onclick="demoStop()">停止本次抓取</button>
+  </div>
+  <div class="bar"><div style="width:28%"></div></div>
+  <div class="stats">
+    <span><b>已处理 7 / 25</b></span>
+    <span class="tag ok">成功 6</span>
+    <span class="tag fail">失败 1</span>
+    <span class="tag skip">跳过 0</span>
+  </div>
+  <div class="note">正在处理：《产品经理面试自我介绍模板》…（没有进行中条目时显示「正在汇总」）</div>
+  <div class="log">
+[07/25] 产品经理面试自我介绍模板 (video) — 抓取中…<br>
+[06/25] 大厂 AI 产品一面真题复盘 (normal) √ 图 9<br>
+[05/25] 字节红果 AI 产品面经 (normal) √ 图 13<br>
+[04/25] 转行 AI 产品三个月心得 (normal) ✗ 打开失败: Timeout 45s（单篇失败不影响后续）
+  </div>
+  <div class="note">⏹ 停止交互状态过渡（点击上方按钮演示）：<b>抓取中</b> → <b>停止请求已接收（正在停止，已完成内容会保留）</b> → <b>已停止 2/5</b>（见状态②）。停止为协作式：抓完当前篇、不再开始下一篇。</div>
+</div>
+
+<!-- 状态 2：用户停止 -->
+<div class="state hidden" id="s2">
+  <div class="row">
+    <b>整号批量采集 · 谷谷谷雨（秋招版）</b>
+    <span class="tag stop">已停止（用户请求）</span>
+    <span class="tag jid">job 20261021-013000-001-fetch · 本页发起</span>
+  </div>
+  <div class="bar"><div style="width:40%;background:var(--amber)"></div></div>
+  <div class="stats">
+    <span><b>已完成 2 / 5</b></span>
+    <span class="tag ok">成功 2</span>
+    <span class="tag fail">失败 0</span>
+    <span class="tag skip">跳过 0</span>
+    <span class="tag skip">未开始 3</span>
+  </div>
+  <div class="note">⏹ 你在 2/5 时选择了停止——已完成内容全部保留（downloads/03_xxx、04_xxx），未开始的 3 篇未抓取。</div>
+  <div class="row" style="margin-top:10px">
+    <button class="ghost" onclick="alert('原型演示：打开 downloads 目录')">打开保存位置</button>
+    <button class="ghost" onclick="alert('原型演示：进入「已抓笔记」页')">查看已抓笔记</button>
+    <button class="primary" onclick="alert('原型演示：继续抓取剩余 3 篇——只处理未开始的 3 篇清单，不重抓已完成 2 篇；以 selection.json 清单仍有效为前提，失效则提示用户重新勾选')">继续抓取剩余 3 篇</button>
+  </div>
+  <div class="note">终态为 <b>stopped</b>（不是 failed）——「用户停止」与「出错失败」是两种不同的诚实状态。</div>
+</div>
+
+<!-- 状态 3：部分完成 -->
+<div class="state hidden" id="s3">
+  <div class="row">
+    <b>整号批量采集 · 某博主</b>
+    <span class="tag fail">部分完成</span>
+    <span class="tag jid">job 20261021-014500-002-fetch · 本页发起</span>
+  </div>
+  <div class="stats">
+    <span><b>已处理 25 / 25</b></span>
+    <span class="tag ok">成功 20</span>
+    <span class="tag fail">失败 3</span>
+    <span class="tag skip">跳过 2</span>
+  </div>
+  <div class="note">✓ 已完成 20 篇全部保留；失败 3 篇可单独重试（不影响已完成目录）：</div>
+  <div class="faillist">
+    ✗ 《AI 产品入门指南》 — goto: Timeout 45s<br>
+    ✗ 《三个月转行实录》 — 评论区加载失败<br>
+    ✗ 《面试穿搭指南》 — 图片下载 2/9 张失败
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="ghost" onclick="alert('原型演示：查看该任务完整运行日志')">查看运行日志</button>
+    <button class="primary" onclick="alert('原型演示：仅重试失败 3 篇（--only-ids，已完成 20 篇不动）')">仅重试失败项</button>
+    <button class="ghost" onclick="alert('原型演示：可回 Agent 对话查询任务详情/继续下一步')">回 Agent 对话查询</button>
+  </div>
+  <div class="def">统计口径：processed = success + failed + skipped（本例 20+3+2=25）。单篇失败不影响任务继续；「部分完成」与「全部失败」是两种不同终态（见状态⑤）。</div>
+</div>
+
+<!-- 状态 4：素材抓取完成 -->
+<div class="state hidden" id="s4">
+  <div class="row">
+    <b>整号批量采集 · 谷谷谷雨（秋招版）</b>
+    <span class="tag ok">素材抓取完成</span>
+    <span class="tag jid">job 20261021-014500-002-fetch · 本页发起</span>
+  </div>
+  <div class="stats">
+    <span><b>成功 23 篇</b></span>
+    <span class="tag fail">失败 0</span>
+    <span class="tag skip">跳过 2</span>
+  </div>
+  <div class="next">
+    📁 <b>素材已保存至</b>：<code>D://Projects//04-小红书工具//xhs-curator//downloads//</code>（23 个笔记目录 + 原图 + 字幕/转写）<br>
+    ⚠️ 当前产物是<b>原始素材包</b>——Markdown 尚未生成（整理/OCR 属于下一阶段，涉及模型成本，需你确认后进行）。<br>
+    <b>如需生成 Markdown，请回到当前 Agent 对话发送「生成 Markdown」。</b>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="ghost" onclick="alert('原型演示：打开 downloads 目录')">打开保存位置</button>
+    <button class="ghost" onclick="alert('原型演示：进入「已抓笔记」页')">查看已抓笔记</button>
+    <button class="ghost" id="copyBtn" onclick="copyRequest()">复制「生成 Markdown」请求</button>
+  </div>
+  <div class="note" id="copyResult"></div>
+  <div class="candidate">
+    🔮 <b>候选能力，待平台验证（P0-B Spike）</b>：抓取完成后由 AI <u>主动</u>在对话里汇报结果——
+    该能力是否可行取决于 WorkBuddy 对话桥接实验（状态回传 + 命令下发），验证通过前本原型不将其画为已上线功能。
+  </div>
+</div>
+
+<!-- 状态 5：全部失败（终态） -->
+<div class="state hidden" id="s5">
+  <div class="row">
+    <b>整号批量采集 · 某博主</b>
+    <span class="tag fail">全部失败</span>
+    <span class="tag jid">job 20261021-020000-003-fetch · 本页发起</span>
+  </div>
+  <div class="stats">
+    <span><b>已处理 25 / 25</b></span>
+    <span class="tag ok">成功 0</span>
+    <span class="tag fail">失败 25</span>
+    <span class="tag skip">跳过 0</span>
+  </div>
+  <div class="note">✗ 全部 25 篇均失败（本例：风控拦截，连续返回空壳页）。与「部分完成」是两种不同终态；「用户停止」为第三种（stopped）。</div>
+  <div class="faillist">
+    ✗ 前 3 篇样例：《AI 产品入门指南》— 空壳页（疑似风控）；《三个月转行实录》— 同；《面试穿搭指南》— 同
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="ghost" onclick="alert('原型演示：查看该任务完整运行日志')">查看运行日志</button>
+    <button class="ghost" onclick="alert('原型演示：可回 Agent 对话查询失败原因与建议（如冷却后重试/降级方案）')">回 Agent 对话查询</button>
+  </div>
+  <div class="note">全部失败时<b>不提供「仅重试失败项」一键重试</b>——风控类全败通常需要冷却或方案调整，重试决策由用户与 AI 在对话中判断后再执行。</div>
+</div>
+
+<script>
+function show(n, btn){
+  document.querySelectorAll('.state').forEach((el,i)=>el.classList.toggle('hidden', i!==n-1));
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+}
+// 状态①停止交互：演示三段状态过渡（抓取中 → 停止请求已接收 → 已停止）
+function demoStop(){
+  const btn = document.getElementById('stopBtn1');
+  btn.disabled = true;
+  btn.textContent = '⏳ 停止请求已接收（正在停止，已完成内容会保留）';
+  setTimeout(()=>{
+    btn.textContent = '✓ 已停止：已完成 2/5（详见状态②）';
+  }, 1500);
+}
+// 状态④：真实复制「生成 Markdown」请求 + 显示已复制（不做假执行）
+function copyRequest(){
+  const text = '生成 Markdown';
+  let ok = false;
+  try{ navigator.clipboard.writeText(text); ok = true; }catch(e){}
+  const el = document.getElementById('copyResult');
+  el.innerHTML = ok
+    ? '<span class="copied">已复制「生成 Markdown」——请粘贴到当前 Agent 对话发送。</span>'
+    : '请回到当前 Agent 对话手动发送「生成 Markdown」。';
+}
+</script>
+</body>
+</html>
