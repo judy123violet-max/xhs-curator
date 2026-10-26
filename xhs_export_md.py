@@ -282,10 +282,27 @@ def _link_basename(link):
     return base
 
 
+def find_vault_attachment_root(dest):
+    """2026-10-21 新契约：附件统一进库根 attachments/（雅旭拍板：全库单附件目录）。
+    从 dest 向上找含 .obsidian 的目录确定为库根；找不到（非 Obsidian 库）返回 None，
+    回退旧行为 <dest>/attachments/。"""
+    p = os.path.abspath(dest)
+    while True:
+        if os.path.isdir(os.path.join(p, ".obsidian")):
+            return os.path.join(p, "attachments")
+        parent = os.path.dirname(p)
+        if parent == p:
+            return None
+        p = parent
+
+
 def copy_attachment(src, dst):
     """幂等拷贝：目标已存在且大小一致就跳过（重复导出零差异）"""
     if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
         return False
+    if os.path.exists(dst):
+        # 库根共享目录后，同名不同内容可能来自不同博主的同标题笔记撞名
+        log(f"[!] 附件同名但内容不同，已覆盖: {os.path.basename(dst)}（若非重导同名笔记，请检查标题撞名）")
     shutil.copy2(src, dst)
     return True
 
@@ -497,7 +514,13 @@ def main():
         log(f"[X] 找不到 {SRC} —— 请先运行 xhs_fetch_selected.py 抓取笔记")
         return
 
-    att_root = os.path.join(dest, "attachments")   # 2026-10-16 契约：单层 attachments/（对齐 vault 设置）
+    vault_att = find_vault_attachment_root(dest)
+    if vault_att:
+        att_root = vault_att          # 2026-10-21 契约：库根单附件目录（对齐 Obsidian 全局设置）
+        log(f"[i] 检测到 Obsidian 库，附件统一写入: {att_root}")
+    else:
+        att_root = os.path.join(dest, "attachments")   # 非 vault 场景回退：单层 attachments/
+        log(f"[i] 非库目录，附件写入: {att_root}")
     os.makedirs(att_root, exist_ok=True)
 
     dirs = sorted(d for d in os.listdir(SRC)
