@@ -376,6 +376,94 @@ def job_stats_payload(todo_ids, manifest, skipped=0, current=None,
             "failures": failures}
 
 
+# ---------------- 任务自注册（2026-10-25） ----------------
+# 当脚本由 AI 对话 / 命令行直接运行（而非采集台「开始抓取」按钮）时，采集台
+# 服务对本任务一无所知，进度条与持久结果卡都不会出现。这里在抓取前自建与采集台
+# 同构的 job 记录（runtime/jobs/<id>.json + .stats.json + .control.json），并注入
+# XHS_JOB_STATS / XHS_JOB_CONTROL 环境变量，使 write_job_stats 照常回写、采集台
+# /api/jobs 能像「点按钮」那样显示进度与结果卡（详见 xhs_picker_server.py 说明）。
+
+_SELF_JOB = None  # main() 内注册后置此；__main__ 据此在退出时终结
+
+
+def _self_job_dir():
+    d = os.path.join(BASE, "runtime", "jobs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def register_self_job(single, args, todo_ids, skipped):
+    """仅当 XHS_JOB_STATS 未设置（即非采集台按钮启动）时调用。返回 job 字典。"""
+    try:
+        jtype = "one" if single else "fetch"
+        ms = (time.time_ns() // 10**6) % 1000
+        job_id = time.strftime("%Y%m%d-%H%M%S") + f"-{ms:03d}-{jtype}"
+        rdir = _self_job_dir()
+        rec = {
+            "job_id": job_id, "type": jtype,
+            "with_comments": not getattr(args, "no_comments", False),
+            "only_ids": [x.strip() for x in (getattr(args, "only_ids", "") or "").split(",") if x.strip()] or [],
+            "selected": len(todo_ids), "started_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ended_at": "", "exit_code": None, "status": "running",
+            "confirmed": False, "stats": None,
+        }
+        stats_path = os.path.join(rdir, job_id + ".stats.json")
+        ctrl_path = os.path.join(rdir, job_id + ".control.json")
+        rec_path = os.path.join(rdir, job_id + ".json")
+        # 先写占位统计，采集台运行期即可读到进度
+        with open(stats_path, "w", encoding="utf-8") as f:
+            json.dump({"stage": "queued", "total": len(todo_ids), "skipped": skipped,
+                       "processed": 0, "ok": 0, "failed": 0,
+                       "current_note_title": "", "failures": []}, f)
+        with open(ctrl_path, "w", encoding="utf-8") as f:
+            json.dump({"stop_requested": False}, f)
+        with open(rec_path, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
+        log(f"[*] 已向采集台注册任务 {job_id}（AI/命令行直跑模式）")
+        return {"job_id": job_id, "record": rec, "record_path": rec_path,
+                "stats_path": stats_path, "ctrl_path": ctrl_path}
+    except Exception as e:
+        log(f"! 任务自注册失败（不影响抓取）: {e}")
+        return None
+
+
+def compute_self_status(stats, exit_code):
+    """终态判定，对齐采集台 server 的 compute_job_status（fetch/one 口径）。"""
+    if not isinstance(stats, dict):
+        return "failed"
+    if stats.get("user_stopped"):
+        return "stopped"
+    total = stats.get("total") or stats.get("planned") or 0
+    processed = stats.get("processed") or 0
+    if total > 0 and processed >= total:
+        return "done"
+    if 0 < processed < total:
+        return "partial"
+    return "failed"
+
+
+def finalize_self_job(sj, exit_code=0):
+    """抓取结束 → 读脚本回写的统计 → 算状态 → 持久化记录（对齐采集台 finalize）。"""
+    try:
+        sp = sj["stats_path"]
+        stats = None
+        if os.path.exists(sp):
+            try:
+                with open(sp, encoding="utf-8") as f:
+                    stats = json.load(f)
+            except Exception:
+                stats = None
+        rec = sj["record"]
+        rec["status"] = compute_self_status(stats, exit_code)
+        rec["ended_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        rec["exit_code"] = exit_code
+        rec["stats"] = stats
+        with open(sj["record_path"], "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log(f"! 任务记录终结失败: {e}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="同 --count")
@@ -457,6 +545,23 @@ def main():
         log("=" * 64)
     todo_ids = [n.get("note_id") for _, n in todo]
     skipped = len(notes_full) - len(todo)
+
+    # 2026-10-25：AI/CLI 直跑且确有可抓任务时，向采集台自注册 job，
+    # 使其也能像「点按钮」那样显示进度与持久结果卡。
+    # 仅在非采集台按钮启动（XHS_JOB_STATS 未注入）且 todo 非空时注册，
+    # 注册后把路径注入环境变量，复用下方既有 write_job_stats / 协作停止逻辑。
+    if todo and not os.environ.get("XHS_JOB_STATS"):
+        try:
+            sj = register_self_job(single, args, todo_ids, skipped)
+            if sj:
+                global _SELF_JOB
+                _SELF_JOB = sj
+                os.environ["XHS_JOB_STATS"] = sj["stats_path"]
+                os.environ["XHS_JOB_CONTROL"] = sj["ctrl_path"]
+        except Exception as e:
+            log(f"! 任务自注册异常: {e}")
+            _SELF_JOB = None
+
     ctrl_path = os.environ.get("XHS_JOB_CONTROL") or ""
 
     def control_stop_requested():
@@ -826,4 +931,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        # 用户主动退出（如 argparse 报错 / sys.exit）原样抛出
+        if _SELF_JOB:
+            finalize_self_job(_SELF_JOB, exit_code=0)
+        raise
+    except Exception:
+        # 抓取中途异常：依已回写统计终结任务记录（保留部分进度）
+        if _SELF_JOB:
+            finalize_self_job(_SELF_JOB, exit_code=1)
+        raise
+    else:
+        # 正常退出：脚本已在终态回写 XHS_JOB_STATS，依其算状态并持久化
+        if _SELF_JOB:
+            finalize_self_job(_SELF_JOB, exit_code=0)

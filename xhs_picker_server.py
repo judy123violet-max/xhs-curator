@@ -730,7 +730,16 @@ function pick(mode){
   }
   render(); persist();
 }
-function updCnt(){ $('cnt').textContent = `已选 ${state.size} 篇`; }
+function updCnt(){
+  // 2026-10-27：同时给出「筛选范围」与「选中数」，避免搜索后只看到「已选 N 篇」
+  // 分不清 N 到底是筛选结果数还是勾选数。
+  const total = notes().length;
+  if(!total){ $('cnt').textContent = `已选 ${state.size} 篇`; return; }
+  const vis = visibleNotes().length;
+  const q = $('q').value.trim();
+  const scope = q ? `筛选出 ${vis} / ${total} 篇` : `共 ${total} 篇`;
+  $('cnt').textContent = `${scope} · 已选 ${state.size} 篇`;
+}
 
 /* ---------- 已抓笔记 tab ---------- */
 function renderDone(){
@@ -923,63 +932,113 @@ async function save(){
     else toast('保存失败: ' + (j.error||''), '#e64545');
   }catch(e){ toast('保存失败: ' + e, '#e64545'); }
 }
+// 健壮复制：优先现代 Clipboard API，失败降级到 execCommand（兼容预览面板内嵌/非安全上下文）
+async function copyText(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    try{ await navigator.clipboard.writeText(text); return true; }catch(e){ /* 落到降级方案 */ }
+  }
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.left = '-9999px'; ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand && document.execCommand('copy');
+    document.body.removeChild(ta);
+    return !!ok;
+  }catch(e){ return false; }
+}
 function copySel(){
   const all = [...(DATA.main?.notes||[]), ...(DATA.search?.notes||[])];
   const txt = [...state].map(id=>{
     const n = all.find(x=>x.note_id===id);
     return n ? `${n.title}\t${n.url}` : id;
   }).join('\n');
-  navigator.clipboard.writeText(txt).then(()=>toast('已复制到剪贴板'));
+  copyText(txt).then(ok => toast(ok ? '已复制到剪贴板' : '复制失败，请手动复制'));
 }
 
 $('q').addEventListener('input', render);
 $('kw').addEventListener('keydown', e=>{ if(e.key==='Enter') startSearch(); });
 
-/* ---------- 持久任务结果卡（2026-10-20 P0） ---------- */
+/* ---------- 持久任务结果卡（2026-10-20 P0；2026-10-25 支持 AI/命令行直跑） ---------- */
 const TIP_DEFAULT = '点卡片=勾选；点标题或「原文↗」在本窗口看详情，勾选不会丢。⚠ 抓取进行中请勿关闭弹出的专用 Chrome 窗口，否则本轮中断（已抓完的不受影响，重跑自动续）';
+let _shownCardId = null;
+// 兜底结果卡的新鲜度窗口：超过 24 小时的任务不再自动浮现（本页按钮发起的不受此限）。
+// 原因：2026-10-27 实测，放宽闸门后新开标签页会串出 7 天前的旧卡，文案却是「上次抓取完成」，误导。
+const FRESH_MS = 24*60*60*1000;
+function jobTime(x){
+  const d = Date.parse(x.ended_at || x.started_at || '');
+  return isNaN(d) ? 0 : d;          // 缺时间信息 → 视为极旧，不参与兜底
+}
+function relTime(t){
+  const d = Date.parse(t || '');
+  if(isNaN(d)) return '';
+  const s = Math.max(0, (Date.now() - d) / 1000);
+  if(s < 60) return '刚刚';
+  if(s < 3600) return Math.floor(s/60) + ' 分钟前';
+  if(s < 86400) return Math.floor(s/3600) + ' 小时前';
+  return Math.floor(s/86400) + ' 天前';
+}
 async function loadJobCard(){
   let j;
   try{ j = await (await fetch('/api/jobs')).json(); }catch(e){ return; }
   const card = $('jobCard');
-  // 2026-10-21 雅旭/Codex 定稿：结果卡只属于「发起它的页面」——
-  // sessionStorage 记录本页发起的 job_id：本页刷新仍可见（持久结果卡），
-  // 新开标签页/其他窗口绝不串出历史卡；确认「知道了」后清除
+  // 2026-10-21 雅旭/Codex 定稿 + 2026-10-25 放宽：
+  // ① 本页经「开始抓取」按钮发起的任务（sessionStorage 锁定）→ 优先显示；
+  // ② 兜底：最近一次「已完成且未确认」的任务（含 AI 对话/命令行直跑发起的抓取）
+  //    —— 这样主力流程（AI 对话发指令）完成后，采集台也能一眼看到结果卡；
+  // ③ confirmed=true（点过「知道了」）的任务不再出现，避免新标签页串出历史卡。
+  const jobs = (j.jobs||[]).filter(x => x.status && x.status !== 'running' && !x.confirmed);
   const myJob = sessionStorage.getItem('xhs_current_job');
-  if(!myJob){ card.style.display='none'; card.innerHTML=''; return; }
-  const latest = (j.jobs||[]).find(x => x.job_id === myJob);
-  if(!latest){ card.style.display='none'; card.innerHTML=''; return; }
-  const st = latest.stats || {};
+  let target = null;
+  if(myJob) target = jobs.find(x => x.job_id === myJob);
+  if(!target){
+    // 兜底只认「新鲜」任务：AI/命令行跑完若隔了很久才打开采集台，
+    // 再弹那张卡只会让人误以为是刚抓的（2026-10-27 修正）。
+    const now = Date.now();
+    target = jobs.filter(x => now - jobTime(x) <= FRESH_MS)
+                 .sort((a,b)=> (b.started_at||'').localeCompare(a.started_at||''))[0];
+  }
+  if(!target){
+    if(_shownCardId){ card.style.display='none'; card.innerHTML=''; _shownCardId=null; }
+    return;
+  }
+  if(target.job_id === _shownCardId) return;   // 同一张卡不重复渲染，避免闪烁
+  _shownCardId = target.job_id;
+  const st = target.stats || {};
   const okN = st.ok ?? 0, fN = st.failed ?? 0, skN = st.skipped ?? 0;
-  const act = latest.actions || {};
+  const act = target.actions || {};
+  const rel = relTime(target.ended_at || target.started_at);
+  const when = rel ? `（${rel}）` : '';   // 卡片右侧已有绝对时间，这里补相对时间，一眼看出新旧
   let head = '', btns = '';
-    if(latest.status === 'done'){
-    head = `<b style="color:var(--teal)">✓ 上次抓取完成：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
+  if(target.status === 'done'){
+    head = `<b style="color:var(--teal)">✓ 抓取完成${when}：成功 ${okN} 篇` + (skN?` · 跳过 ${skN} 篇`:'') + '</b>';
     if(act.view_notes) btns = `<button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
-    if(act.continue_flow) btns += ` <button onclick="continueFlow('${latest.job_id}')">复制「生成 Markdown」请求</button>`;
-  }else if(latest.status === 'stopped'){
-    head = `<b style="color:var(--amber)">⏹ 上次抓取已停止（用户请求）：已完成 ${okN} / ${st.total ?? okN} 篇` + (skN?` · 跳过 ${skN}`:'') + '</b>';
+    if(act.continue_flow) btns += ` <button onclick="continueFlow('${target.job_id}')">复制「生成 Markdown」请求</button>`;
+  }else if(target.status === 'stopped'){
+    head = `<b style="color:var(--amber)">⏹ 抓取已停止${when}（用户请求）：已完成 ${okN} / ${st.total ?? okN} 篇` + (skN?` · 跳过 ${skN}`:'') + '</b>';
     if(act.open_location) btns = `<button class="ghost" onclick="openDownloads()">打开保存位置</button>`;
     if(act.view_notes) btns += ` <button class="teal" onclick="switchTab('done')">查看已抓笔记</button>`;
     if(act.resume) btns += ` <button class="primary" onclick="startFetch()">继续抓取剩余（自动续，不重抓已完成）</button>`;
-  }else if(latest.status === 'partial'){
-    head = `<b style="color:#B45309">⚠ 上次抓取部分完成：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
+  }else if(target.status === 'partial'){
+    head = `<b style="color:#B45309">⚠ 抓取部分完成${when}：成功 ${okN} · 失败 ${fN}` + (skN?` · 跳过 ${skN}`:'') + '</b>';
   }else{
-    head = `<b style="color:#e64545">✗ 上次抓取失败</b>` + (latest.stats ? `（成功 ${okN} · 失败 ${fN}）` : '（进程异常终止，无统计；已抓完的自动跳过）');
+    head = `<b style="color:#e64545">✗ 抓取失败${when}</b>` + (target.stats ? `（成功 ${okN} · 失败 ${fN}）` : '（进程异常终止，无统计；已抓完的自动跳过）');
   }
   // 按钮按后端下发的 actions 渲染：失败有明细→重试+原因；崩溃无统计→查看日志
-  if(act.log) btns += ` <button onclick="viewJobLog('${latest.job_id}')">查看运行日志</button>`;
+  if(act.log) btns += ` <button onclick="viewJobLog('${target.job_id}')">查看运行日志</button>`;
   if(act.failures) btns += ` <button onclick="toggleFailures()">查看失败原因</button>`;
-  if(act.retry) btns += ` <button class="teal" onclick="retryFailed('${latest.job_id}')">仅重试失败项</button>`;
-  btns += ` <button onclick="confirmJob('${latest.job_id}')">知道了</button>`;
+  if(act.retry) btns += ` <button class="teal" onclick="retryFailed('${target.job_id}')">仅重试失败项</button>`;
+  btns += ` <button onclick="confirmJob('${target.job_id}')">知道了</button>`;
   const fails = act.failures ? (st.failures||[]).map(f=>`<li>「${(f.title||f.note_id||'').slice(0,36)}」：${(f.error||'').slice(0,80)}</li>`).join('') : '';
-  const nextStep = latest.status === 'done'
+  const nextStep = target.status === 'done'
     ? '📁 素材已保存至工作台目录的 downloads/（原始素材包，Markdown 尚未生成）。如需生成 Markdown，请回到当前 Agent 对话发送「生成 Markdown」。'
-    : latest.status === 'stopped'
+    : target.status === 'stopped'
     ? '📁 已完成内容已保存至工作台目录的 downloads/。可点「继续抓取剩余」自动续，或回 Agent 对话查询。'
     : '📁 部分素材已保存至工作台目录的 downloads/。失败原因与下一步可回 Agent 对话查询。';
   card.innerHTML = `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin:10px 16px;background:var(--bg2,#F7F8FA)">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">${head}
-      <span style="font-size:11px;color:#888">${latest.started_at||''} · ${latest.type}${latest.with_comments===false?' · 不抓评论':''}</span>
+      <span style="font-size:11px;color:#888">${target.started_at||''} · ${target.type}${target.with_comments===false?' · 不抓评论':''}</span>
       <span style="flex:1"></span>${btns}
     </div>
     <div class="meta" style="margin-top:6px">${nextStep}</div>
@@ -1000,10 +1059,9 @@ async function viewJobLog(jid){
 }
 async function continueFlow(jid){
   const guide = '生成 Markdown';
-  let copied = false;
-  try{ await navigator.clipboard.writeText(guide); copied = true; }catch(e){}
-  toast(copied ? '已复制「生成 Markdown」——粘贴到当前 Agent 对话发送'
-               : '请回到当前 Agent 对话手动发送「生成 Markdown」', 'var(--teal)');
+  const ok = await copyText(guide);
+  toast(ok ? '已复制「生成 Markdown」——粘贴到当前 Agent 对话发送'
+            : '复制失败，请手动在对话输入「生成 Markdown」发送', 'var(--teal)');
 }
 async function confirmJob(jid){
   try{ await fetch('/api/jobs/' + jid + '/confirm', {method:'POST'}); }catch(e){}
@@ -1036,6 +1094,9 @@ function payloadTypeWarn(){
 (async function init(){
   await loadManifest();
   loadJobCard();
+  // 2026-10-25：AI 对话/命令行直跑的抓取不会走 pollJob，这里轻量轮询，
+  // 让完成后结果卡自动浮现（按钮发起的任务由 pollJob 负责，互不冲突）
+  setInterval(loadJobCard, 5000);
   await switchTab('main');
   persist();
   try{

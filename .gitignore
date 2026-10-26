@@ -18,3 +18,6 @@ env/
 Thumbs.db
 models/
 runtime/
+
+# 服务运行日志（启动采集台时重定向产生）
+picker_console.log
